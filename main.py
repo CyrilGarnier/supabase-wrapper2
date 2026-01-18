@@ -1,29 +1,34 @@
 """
-Wrapper API pour BaseGenspark Supabase
-Permet aux agents Genspark d'interagir avec la base de données
+Wrapper API pour BaseGenspark Supabase (version ultra-simplifiée)
+Sans Pydantic, sans Supabase client - uniquement stdlib + FastAPI
 """
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any
 from datetime import datetime
-import os
-from supabase import create_client, Client
-import uvicorn
+import httpx
 
-# Configuration
+# Configuration Supabase
 SUPABASE_URL = "https://iepvmuzfdkklysnqbvwt.supabase.co"
 SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImllcHZtdXpmZGtrbHlzbnFidnd0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njg3MTM0NDEsImV4cCI6MjA4NDI4OTQ0MX0.N_veJeUbrCVmW5eHMqCvMvwZb6LD-7cJ9NFa8aCGPIY"
 
-# Initialisation
+# Headers pour Supabase REST API
+HEADERS = {
+    "apikey": SUPABASE_KEY,
+    "Authorization": f"Bearer {SUPABASE_KEY}",
+    "Content-Type": "application/json",
+    "Prefer": "return=representation"
+}
+
+# Initialisation FastAPI
 app = FastAPI(
     title="BaseGenspark Wrapper API",
-    description="API wrapper pour agents Genspark → Supabase",
-    version="1.0.0"
+    description="API wrapper pour agents Genspark → Supabase (ultra-simplifié)",
+    version="1.2.0"
 )
 
-# CORS pour permettre les appels depuis n'importe où
+# CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -32,20 +37,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Client Supabase
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-
-# Modèles Pydantic
-class AgentLog(BaseModel):
-    agent_name: str = Field(..., description="Nom de l'agent")
-    action: str = Field(..., description="Action effectuée")
-    details: Optional[Dict[str, Any]] = Field(None, description="Détails JSON")
-
-class AgentLogUpdate(BaseModel):
-    agent_name: Optional[str] = None
-    action: Optional[str] = None
-    details: Optional[Dict[str, Any]] = None
-
 # Routes
 @app.get("/")
 async def root():
@@ -53,7 +44,7 @@ async def root():
     return {
         "service": "BaseGenspark Wrapper API",
         "status": "operational",
-        "version": "1.0.0",
+        "version": "1.2.0",
         "endpoints": {
             "logs": "/logs - Lire tous les logs",
             "create": "POST /logs - Créer un log",
@@ -70,8 +61,13 @@ async def root():
 async def health_check():
     """Vérification de santé de l'API"""
     try:
-        # Test connexion Supabase
-        result = supabase.table('agent_logs').select("id").limit(1).execute()
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{SUPABASE_URL}/rest/v1/agent_logs?select=id&limit=1",
+                headers=HEADERS,
+                timeout=10.0
+            )
+            response.raise_for_status()
         return {
             "status": "healthy",
             "supabase": "connected",
@@ -92,19 +88,20 @@ async def get_all_logs(
 ):
     """Récupère tous les logs avec pagination et filtres"""
     try:
-        query = supabase.table('agent_logs').select("*")
+        url = f"{SUPABASE_URL}/rest/v1/agent_logs?select=*&order=timestamp.desc&limit={limit}&offset={offset}"
         
         if agent_name:
-            query = query.eq('agent_name', agent_name)
+            url += f"&agent_name=eq.{agent_name}"
         
-        query = query.order('timestamp', desc=True).range(offset, offset + limit - 1)
-        
-        result = query.execute()
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url, headers=HEADERS, timeout=10.0)
+            response.raise_for_status()
+            data = response.json()
         
         return {
             "success": True,
-            "count": len(result.data),
-            "data": result.data
+            "count": len(data),
+            "data": data
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -113,14 +110,21 @@ async def get_all_logs(
 async def get_log(log_id: int):
     """Récupère un log spécifique par ID"""
     try:
-        result = supabase.table('agent_logs').select("*").eq('id', log_id).execute()
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{SUPABASE_URL}/rest/v1/agent_logs?id=eq.{log_id}",
+                headers=HEADERS,
+                timeout=10.0
+            )
+            response.raise_for_status()
+            data = response.json()
         
-        if not result.data:
+        if not data:
             raise HTTPException(status_code=404, detail="Log non trouvé")
         
         return {
             "success": True,
-            "data": result.data[0]
+            "data": data[0]
         }
     except HTTPException:
         raise
@@ -128,70 +132,103 @@ async def get_log(log_id: int):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/logs")
-async def create_log(log: AgentLog):
+async def create_log(log_data: Dict[str, Any]):
     """Crée un nouveau log"""
     try:
-        result = supabase.table('agent_logs').insert({
-            "agent_name": log.agent_name,
-            "action": log.action,
-            "details": log.details or {}
-        }).execute()
+        # Validation simple
+        if "agent_name" not in log_data or "action" not in log_data:
+            raise HTTPException(
+                status_code=400, 
+                detail="Champs requis: agent_name, action"
+            )
+        
+        payload = {
+            "agent_name": log_data["agent_name"],
+            "action": log_data["action"],
+            "details": log_data.get("details", {})
+        }
+        
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{SUPABASE_URL}/rest/v1/agent_logs",
+                headers=HEADERS,
+                json=payload,
+                timeout=10.0
+            )
+            response.raise_for_status()
+            data = response.json()
         
         return {
             "success": True,
             "message": "Log créé avec succès",
-            "data": result.data[0]
+            "data": data[0] if isinstance(data, list) else data
         }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/logs/batch")
-async def create_logs_batch(logs: List[AgentLog]):
+async def create_logs_batch(logs_data: List[Dict[str, Any]]):
     """Crée plusieurs logs en une seule requête"""
     try:
-        logs_data = [
-            {
-                "agent_name": log.agent_name,
-                "action": log.action,
-                "details": log.details or {}
-            }
-            for log in logs
-        ]
+        payload = []
+        for log in logs_data:
+            if "agent_name" not in log or "action" not in log:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Chaque log doit avoir agent_name et action"
+                )
+            payload.append({
+                "agent_name": log["agent_name"],
+                "action": log["action"],
+                "details": log.get("details", {})
+            })
         
-        result = supabase.table('agent_logs').insert(logs_data).execute()
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{SUPABASE_URL}/rest/v1/agent_logs",
+                headers=HEADERS,
+                json=payload,
+                timeout=10.0
+            )
+            response.raise_for_status()
+            data = response.json()
         
         return {
             "success": True,
-            "message": f"{len(result.data)} logs créés avec succès",
-            "data": result.data
+            "message": f"{len(data)} logs créés avec succès",
+            "data": data
         }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.put("/logs/{log_id}")
-async def update_log(log_id: int, log: AgentLogUpdate):
+async def update_log(log_id: int, update_data: Dict[str, Any]):
     """Met à jour un log existant"""
     try:
-        update_data = {}
-        if log.agent_name is not None:
-            update_data["agent_name"] = log.agent_name
-        if log.action is not None:
-            update_data["action"] = log.action
-        if log.details is not None:
-            update_data["details"] = log.details
-        
         if not update_data:
             raise HTTPException(status_code=400, detail="Aucune donnée à mettre à jour")
         
-        result = supabase.table('agent_logs').update(update_data).eq('id', log_id).execute()
+        async with httpx.AsyncClient() as client:
+            response = await client.patch(
+                f"{SUPABASE_URL}/rest/v1/agent_logs?id=eq.{log_id}",
+                headers=HEADERS,
+                json=update_data,
+                timeout=10.0
+            )
+            response.raise_for_status()
+            data = response.json()
         
-        if not result.data:
+        if not data:
             raise HTTPException(status_code=404, detail="Log non trouvé")
         
         return {
             "success": True,
             "message": "Log mis à jour avec succès",
-            "data": result.data[0]
+            "data": data[0] if isinstance(data, list) else data
         }
     except HTTPException:
         raise
@@ -202,15 +239,22 @@ async def update_log(log_id: int, log: AgentLogUpdate):
 async def delete_log(log_id: int):
     """Supprime un log"""
     try:
-        result = supabase.table('agent_logs').delete().eq('id', log_id).execute()
+        async with httpx.AsyncClient() as client:
+            response = await client.delete(
+                f"{SUPABASE_URL}/rest/v1/agent_logs?id=eq.{log_id}",
+                headers=HEADERS,
+                timeout=10.0
+            )
+            response.raise_for_status()
+            data = response.json()
         
-        if not result.data:
+        if not data:
             raise HTTPException(status_code=404, detail="Log non trouvé")
         
         return {
             "success": True,
             "message": "Log supprimé avec succès",
-            "data": result.data[0]
+            "data": data[0] if isinstance(data, list) else data
         }
     except HTTPException:
         raise
@@ -224,18 +268,20 @@ async def get_logs_by_agent(
 ):
     """Récupère tous les logs d'un agent spécifique"""
     try:
-        result = supabase.table('agent_logs')\
-            .select("*")\
-            .eq('agent_name', agent_name)\
-            .order('timestamp', desc=True)\
-            .limit(limit)\
-            .execute()
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{SUPABASE_URL}/rest/v1/agent_logs?agent_name=eq.{agent_name}&order=timestamp.desc&limit={limit}",
+                headers=HEADERS,
+                timeout=10.0
+            )
+            response.raise_for_status()
+            data = response.json()
         
         return {
             "success": True,
             "agent": agent_name,
-            "count": len(result.data),
-            "data": result.data
+            "count": len(data),
+            "data": data
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -244,16 +290,19 @@ async def get_logs_by_agent(
 async def get_recent_logs(limit: int = Query(10, description="Nombre de logs à récupérer")):
     """Récupère les N logs les plus récents"""
     try:
-        result = supabase.table('agent_logs')\
-            .select("*")\
-            .order('timestamp', desc=True)\
-            .limit(limit)\
-            .execute()
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{SUPABASE_URL}/rest/v1/agent_logs?select=*&order=timestamp.desc&limit={limit}",
+                headers=HEADERS,
+                timeout=10.0
+            )
+            response.raise_for_status()
+            data = response.json()
         
         return {
             "success": True,
-            "count": len(result.data),
-            "data": result.data
+            "count": len(data),
+            "data": data
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -262,18 +311,24 @@ async def get_recent_logs(limit: int = Query(10, description="Nombre de logs à 
 async def get_stats():
     """Statistiques globales sur les logs"""
     try:
-        # Total logs
-        all_logs = supabase.table('agent_logs').select("agent_name").execute()
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{SUPABASE_URL}/rest/v1/agent_logs?select=agent_name",
+                headers=HEADERS,
+                timeout=10.0
+            )
+            response.raise_for_status()
+            all_logs = response.json()
         
         # Comptage par agent
         agent_counts = {}
-        for log in all_logs.data:
+        for log in all_logs:
             agent = log['agent_name']
             agent_counts[agent] = agent_counts.get(agent, 0) + 1
         
         return {
             "success": True,
-            "total_logs": len(all_logs.data),
+            "total_logs": len(all_logs),
             "agents": agent_counts,
             "unique_agents": len(agent_counts)
         }
@@ -281,4 +336,5 @@ async def get_stats():
         raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
+    import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
