@@ -1,0 +1,11 @@
+INFO:     Started server process [1646]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+INFO:     127.0.0.1:55736 - "GET / HTTP/1.1" 200 OK
+/home/user/supabase-wrapper/main.py:78: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  "timestamp": datetime.utcnow().isoformat()
+INFO:     127.0.0.1:43714 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49098 - "GET /logs HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49112 - "POST /logs HTTP/1.1" 200 OK
+INFO:     127.0.0.1:39024 - "GET /stats HTTP/1.1" 200 OK
