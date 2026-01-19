@@ -1,41 +1,34 @@
 """
-=====================================================
-BaseGenspark API - Version 3.1 avec Authentification
-Fusionné : API existante + Sécurité RBAC
-=====================================================
+BaseGenspark API v3.0 FINAL
+API sécurisée pour agents pédagogiques Genspark
 """
 
-import os
-import httpx
+from fastapi import FastAPI, HTTPException, Depends, Header, status
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field
+from typing import Optional, List, Dict, Any
+from datetime import datetime, timedelta
+from supabase import create_client, Client
 import bcrypt
 import jwt
-from datetime import datetime, timedelta
-from fastapi import FastAPI, HTTPException, Depends, Header, Request
-from fastapi.middleware.cors import CORSMiddleware
-from typing import Optional, List, Dict, Any
+import os
+import httpx
+import uuid
 
-# =====================================================
-# CONFIGURATION
-# =====================================================
-
-SUPABASE_URL = "https://iepvmuzfdkklysnqbvwt.supabase.co"
-SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImllcHZtdXpmZGtrbHlzbnFidnd0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njg3MTM0NDEsImV4cCI6MjA4NDI4OTQ0MX0.N_veJeUbrCVmW5eHMqCvMvwZb6LD-7cJ9NFa8aCGPIY"
-
-JWT_SECRET = os.getenv("JWT_SECRET", "basegenspark_secret_2026_change_me_in_production")
+# Configuration
+SUPABASE_URL = os.getenv("SUPABASE_URL", "https://iepvmuzfdkklysnqbvwt.supabase.co")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImllcHZtdXpmZGtrbHlzbnFidnd0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njg3MTM0NDEsImV4cCI6MjA4NDI4OTQ0MX0.N_veJeUbrCVmW5eHMqCvMvwZb6LD-7cJ9NFa8aCGPIY")
+JWT_SECRET = os.getenv("JWT_SECRET", "basegenspark_secret_2026")
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRATION_HOURS = 24
-
+AGENT_SECRET_TOKEN = os.getenv("AGENT_SECRET_TOKEN", "AGENT_TOKEN_PHOTOMENTOR_2026")
 ADMIN_EMAIL = "cyril@alkymya.co"
 
-# =====================================================
-# FASTAPI APP
-# =====================================================
+# Initialisation Supabase
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-app = FastAPI(
-    title="BaseGenspark API",
-    version="2.0.0",
-    description="API sécurisée pour agents Genspark avec authentification RBAC"
-)
+# FastAPI App
+app = FastAPI(title="BaseGenspark API", version="3.0.0")
 
 # CORS
 app.add_middleware(
@@ -46,836 +39,290 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Client HTTP global
-httpx_client = httpx.AsyncClient(timeout=30.0)
+# Models
+class UserRegister(BaseModel):
+    email: str
+    password: str = Field(min_length=8)
+    full_name: str
+    role: str = "STUDENT"
+    institution: Optional[str] = None
 
-# =====================================================
-# SÉCURITÉ : FONCTIONS UTILITAIRES
-# =====================================================
+class UserLogin(BaseModel):
+    email: str
+    password: str
 
-def hash_password(password: str) -> tuple[str, str]:
-    """Hashe un mot de passe avec bcrypt"""
+class SessionCreate(BaseModel):
+    session_id: str
+    user_id: str
+    agent_name: str
+    status: str = "in_progress"
+    progression_current: int = 0
+    progression_total: int = 5
+    progression_label: Optional[str] = None
+    metadata: Optional[Dict[str, Any]] = None
+
+class SessionUpdate(BaseModel):
+    status: Optional[str] = None
+    progression_current: Optional[int] = None
+    progression_label: Optional[str] = None
+    resources_count: Optional[int] = None
+    metadata: Optional[Dict[str, Any]] = None
+
+class SessionComplete(BaseModel):
+    score: Optional[float] = None
+    strengths: Optional[List[str]] = None
+    improvements: Optional[List[str]] = None
+    metadata: Optional[Dict[str, Any]] = None
+
+class AgentSessionStart(BaseModel):
+    student_email: str
+    agent_name: str
+    progression_total: int = 5
+    progression_label: Optional[str] = None
+    metadata: Optional[Dict[str, Any]] = None
+
+class AgentSessionUpdate(BaseModel):
+    progression_current: Optional[int] = None
+    progression_label: Optional[str] = None
+    resources_count: Optional[int] = None
+    metadata: Optional[Dict[str, Any]] = None
+
+class AgentSessionEnd(BaseModel):
+    score: Optional[float] = None
+    strengths: Optional[List[str]] = None
+    improvements: Optional[List[str]] = None
+    metadata: Optional[Dict[str, Any]] = None
+
+# Security utilities
+def hash_password(password: str) -> tuple:
     salt = bcrypt.gensalt(rounds=12)
-    password_hash = bcrypt.hashpw(password.encode('utf-8'), salt)
-    return password_hash.decode('utf-8'), salt.decode('utf-8')
+    hashed = bcrypt.hashpw(password.encode('utf-8'), salt)
+    return hashed.decode('utf-8'), salt.decode('utf-8')
 
-def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """Vérifie un mot de passe"""
+def verify_password(plain: str, hashed: str) -> bool:
     try:
-        return bcrypt.checkpw(
-            plain_password.encode('utf-8'),
-            hashed_password.encode('utf-8')
-        )
+        return bcrypt.checkpw(plain.encode('utf-8'), hashed.encode('utf-8'))
     except:
         return False
 
-def create_jwt_token(user_data: dict) -> str:
-    """Crée un JWT token"""
+def create_jwt_token(user: dict) -> str:
     payload = {
-        "user_id": user_data["id"],
-        "email": user_data["email"],
-        "role": user_data["role"],
+        "user_id": user["id"],
+        "email": user["email"],
+        "role": user["role"],
         "exp": datetime.utcnow() + timedelta(hours=JWT_EXPIRATION_HOURS),
         "iat": datetime.utcnow()
     }
     return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
 
 def decode_jwt_token(token: str) -> dict:
-    """Décode et vérifie un JWT token"""
     try:
-        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
-        return payload
-    except jwt.ExpiredSignatureError:
-        raise HTTPException(401, "Token expired")
-    except jwt.InvalidTokenError:
-        raise HTTPException(401, "Invalid token")
+        return jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+    except:
+        raise HTTPException(status_code=401, detail="Token invalide")
 
 async def get_current_user(authorization: Optional[str] = Header(None)):
-    """Récupère l'utilisateur authentifié"""
-    if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(401, "Missing or invalid authorization header")
-    
-    token = authorization.replace("Bearer ", "")
+    if not authorization:
+        raise HTTPException(status_code=401, detail="Token manquant")
+    scheme, token = authorization.split()
     payload = decode_jwt_token(token)
-    
-    response = await httpx_client.get(
-        f"{SUPABASE_URL}/rest/v1/users",
-        headers={
-            "apikey": SUPABASE_KEY,
-            "Authorization": f"Bearer {SUPABASE_KEY}",
-        },
-        params={"id": f"eq.{payload['user_id']}"}
-    )
-    
-    users = response.json()
-    if not users:
-        raise HTTPException(401, "User not found")
-    
-    user = users[0]
-    if not user.get("is_active"):
-        raise HTTPException(403, "Account disabled")
-    
-    return user
+    response = supabase.table("users").select("*").eq("id", payload["user_id"]).execute()
+    if not response.data:
+        raise HTTPException(status_code=401, detail="Utilisateur introuvable")
+    return response.data[0]
 
-def require_role(*allowed_roles: str):
-    """Décorateur pour vérifier les rôles"""
-    async def role_checker(current_user: dict = Depends(get_current_user)):
-        if current_user["role"] not in allowed_roles:
-            raise HTTPException(
-                403,
-                f"Insufficient permissions. Required: {', '.join(allowed_roles)}"
-            )
-        return current_user
-    return role_checker
+async def require_admin(current_user: dict = Depends(get_current_user)):
+    if current_user["role"] != "ADMIN":
+        raise HTTPException(status_code=403, detail="Accès refusé")
+    return current_user
 
-# =====================================================
-# ROUTES : PAGE D'ACCUEIL
-# =====================================================
+async def verify_agent_token(x_agent_token: Optional[str] = Header(None)):
+    if not x_agent_token or x_agent_token != AGENT_SECRET_TOKEN:
+        raise HTTPException(status_code=401, detail="Token agent invalide")
+    return True
 
+# Endpoints
 @app.get("/")
 async def root():
-    """Page d'accueil de l'API"""
-    return {
-        "service": "BaseGenspark API",
-        "version": "2.0.0",
-        "status": "operational",
-        "features": {
-            "authentication": "JWT + bcrypt",
-            "rbac": "5 roles (ADMIN, INSTRUCTOR, STUDENT, ANALYST, AGENT)",
-            "rgpd_compliant": True
-        },
-        "endpoints": {
-            "auth": ["/auth/register", "/auth/login", "/auth/me"],
-            "logs": ["/logs", "/logs/{id}", "/logs/agent/{name}", "/logs/recent"],
-            "stats": ["/stats"],
-            "admin": ["/admin/users", "/admin/users/{id}/role"]
-        },
-        "documentation": "/docs"
-    }
+    return {"message": "BaseGenspark API v3.0", "status": "operational"}
 
 @app.get("/health")
-async def health_check():
-    """Vérification de santé"""
+async def health():
     try:
-        response = await httpx_client.get(
-            f"{SUPABASE_URL}/rest/v1/users?limit=1",
-            headers={
-                "apikey": SUPABASE_KEY,
-                "Authorization": f"Bearer {SUPABASE_KEY}",
-            }
-        )
-        supabase_status = "connected" if response.status_code == 200 else "error"
+        supabase.table("users").select("count").limit(1).execute()
+        return {"status": "healthy", "supabase": "connected"}
     except:
-        supabase_status = "unreachable"
-    
-    return {
-        "status": "healthy",
-        "supabase": supabase_status,
-        "timestamp": datetime.utcnow().isoformat()
-    }
-
-# =====================================================
-# ROUTES : AUTHENTIFICATION
-# =====================================================
+        return {"status": "unhealthy", "supabase": "disconnected"}
 
 @app.post("/auth/register")
-async def register_user(data: dict):
-    """
-    Inscription d'un nouvel utilisateur
+async def register(user: UserRegister):
+    existing = supabase.table("users").select("id").eq("email", user.email).execute()
+    if existing.data:
+        raise HTTPException(status_code=400, detail="Email déjà utilisé")
     
-    Body:
-    {
-      "email": "etudiant@example.com",
-      "password": "MotDePasse123!",
-      "name": "Alice Dupont",
-      "role": "STUDENT",
-      "promotion": "2025-2026"
-    }
-    """
-    # Vérifier email unique
-    check_response = await httpx_client.get(
-        f"{SUPABASE_URL}/rest/v1/users",
-        headers={
-            "apikey": SUPABASE_KEY,
-            "Authorization": f"Bearer {SUPABASE_KEY}",
-        },
-        params={"email": f"eq.{data['email']}"}
-    )
-    
-    if check_response.json():
-        raise HTTPException(400, "Email already registered")
-    
-    # Hasher le mot de passe
-    password_hash, password_salt = hash_password(data["password"])
-    
-    # Créer l'utilisateur
+    hashed, salt = hash_password(user.password)
     user_data = {
-        "email": data["email"],
-        "password_hash": password_hash,
-        "password_salt": password_salt,
-        "name": data["name"],
-        "role": data.get("role", "STUDENT"),
-        "promotion": data.get("promotion"),
-        "institution": data.get("institution", "Grande École"),
-        "is_active": True,
-        "consent_given": False
+        "email": user.email,
+        "password_hash": hashed,
+        "salt": salt,
+        "full_name": user.full_name,
+        "role": user.role,
+        "institution": user.institution,
+        "created_at": datetime.utcnow().isoformat()
     }
     
-    response = await httpx_client.post(
-        f"{SUPABASE_URL}/rest/v1/users",
-        headers={
-            "apikey": SUPABASE_KEY,
-            "Authorization": f"Bearer {SUPABASE_KEY}",
-            "Content-Type": "application/json",
-            "Prefer": "return=representation"
-        },
-        json=user_data
-    )
-    
-    if response.status_code != 201:
-        raise HTTPException(500, "Failed to create user")
-    
-    new_user = response.json()[0]
-    
-    return {
-        "success": True,
-        "user_id": new_user["id"],
-        "email": new_user["email"],
-        "message": "User created successfully"
-    }
-
-@app.post("/auth/login")
-async def login(data: dict):
-    """
-    Connexion utilisateur
-    
-    Body:
-    {
-      "email": "cyril@alkymya.co",
-      "password": "AdminPass2026!"
-    }
-    """
-    # Récupérer l'utilisateur
-    response = await httpx_client.get(
-        f"{SUPABASE_URL}/rest/v1/users",
-        headers={
-            "apikey": SUPABASE_KEY,
-            "Authorization": f"Bearer {SUPABASE_KEY}",
-        },
-        params={"email": f"eq.{data['email']}"}
-    )
-    
-    users = response.json()
-    if not users:
-        raise HTTPException(401, "Invalid credentials")
-    
-    user = users[0]
-    
-    if not user.get("is_active"):
-        raise HTTPException(403, "Account disabled")
-    
-    # Vérifier le mot de passe
-    if not verify_password(data["password"], user["password_hash"]):
-        raise HTTPException(401, "Invalid credentials")
-    
-    # Mettre à jour last_login_at
-    await httpx_client.patch(
-        f"{SUPABASE_URL}/rest/v1/users",
-        headers={
-            "apikey": SUPABASE_KEY,
-            "Authorization": f"Bearer {SUPABASE_KEY}",
-            "Content-Type": "application/json",
-        },
-        params={"id": f"eq.{user['id']}"},
-        json={"last_login_at": datetime.utcnow().isoformat()}
-    )
-    
-    # Créer le JWT
-    token = create_jwt_token(user)
-    
-    # Retourner sans les passwords
-    safe_user = {k: v for k, v in user.items() if k not in ["password_hash", "password_salt"]}
+    response = supabase.table("users").insert(user_data).execute()
+    created_user = response.data[0]
+    token = create_jwt_token(created_user)
     
     return {
         "access_token": token,
         "token_type": "bearer",
-        "user": safe_user
-    }
-
-@app.get("/auth/me")
-async def get_me(current_user: dict = Depends(get_current_user)):
-    """Récupère les infos de l'utilisateur connecté"""
-    safe_user = {k: v for k, v in current_user.items() if k not in ["password_hash", "password_salt"]}
-    return safe_user
-
-@app.post("/auth/consent")
-async def accept_consent(
-    data: dict,
-    current_user: dict = Depends(get_current_user)
-):
-    """Accepter le consentement RGPD"""
-    await httpx_client.patch(
-        f"{SUPABASE_URL}/rest/v1/users",
-        headers={
-            "apikey": SUPABASE_KEY,
-            "Authorization": f"Bearer {SUPABASE_KEY}",
-            "Content-Type": "application/json",
-        },
-        params={"id": f"eq.{current_user['id']}"},
-        json={
-            "consent_given": True,
-            "consent_date": datetime.utcnow().isoformat(),
-            "consent_version": data.get("version", "v1.0")
+        "user": {
+            "id": created_user["id"],
+            "email": created_user["email"],
+            "full_name": created_user["full_name"],
+            "role": created_user["role"]
         }
-    )
-    
-    return {"success": True, "message": "Consent recorded"}
+    }
 
-# =====================================================
-# ROUTES : LOGS (PROTÉGÉES)
-# =====================================================
-
-@app.get("/logs")
-async def read_logs(
-    limit: int = 100,
-    current_user: dict = Depends(get_current_user)
-):
-    """Lecture des logs (authentification requise)"""
-    # STUDENT ne voit que ses propres logs
-    params = {"limit": str(limit), "order": "timestamp.desc"}
-    if current_user["role"] == "STUDENT":
-        params["agent_name"] = f"eq.user:{current_user['id']}"
+@app.post("/auth/login")
+async def login(credentials: UserLogin):
+    response = supabase.table("users").select("*").eq("email", credentials.email).execute()
+    if not response.data:
+        raise HTTPException(status_code=401, detail="Email ou mot de passe incorrect")
     
-    response = await httpx_client.get(
-        f"{SUPABASE_URL}/rest/v1/agent_logs",
-        headers={
-            "apikey": SUPABASE_KEY,
-            "Authorization": f"Bearer {SUPABASE_KEY}",
-        },
-        params=params
-    )
+    user = response.data[0]
+    if not verify_password(credentials.password, user["password_hash"]):
+        raise HTTPException(status_code=401, detail="Email ou mot de passe incorrect")
     
+    token = create_jwt_token(user)
     return {
-        "success": True,
-        "count": len(response.json()),
-        "data": response.json()
-    }
-
-@app.post("/logs")
-async def create_log(
-    data: dict,
-    current_user: dict = Depends(get_current_user)
-):
-    """Créer un log (tous les utilisateurs authentifiés)"""
-    log_data = {
-        "agent_name": data.get("agent_name"),
-        "action": data.get("action"),
-        "details": data.get("details", {})
-    }
-    
-    response = await httpx_client.post(
-        f"{SUPABASE_URL}/rest/v1/agent_logs",
-        headers={
-            "apikey": SUPABASE_KEY,
-            "Authorization": f"Bearer {SUPABASE_KEY}",
-            "Content-Type": "application/json",
-            "Prefer": "return=representation"
-        },
-        json=log_data
-    )
-    
-    if response.status_code == 201:
-        return {"success": True, "data": response.json()[0]}
-    else:
-        raise HTTPException(500, "Failed to create log")
-
-@app.get("/logs/recent")
-async def get_recent_logs(
-    limit: int = 10,
-    current_user: dict = Depends(get_current_user)
-):
-    """Logs récents"""
-    params = {"limit": str(limit), "order": "timestamp.desc"}
-    if current_user["role"] == "STUDENT":
-        params["agent_name"] = f"eq.user:{current_user['id']}"
-    
-    response = await httpx_client.get(
-        f"{SUPABASE_URL}/rest/v1/agent_logs",
-        headers={
-            "apikey": SUPABASE_KEY,
-            "Authorization": f"Bearer {SUPABASE_KEY}",
-        },
-        params=params
-    )
-    
-    return {
-        "success": True,
-        "count": len(response.json()),
-        "data": response.json()
-    }
-
-@app.get("/logs/agent/{agent_name}")
-async def get_logs_by_agent(
-    agent_name: str,
-    current_user: dict = Depends(get_current_user)
-):
-    """Logs d'un agent spécifique"""
-    response = await httpx_client.get(
-        f"{SUPABASE_URL}/rest/v1/agent_logs",
-        headers={
-            "apikey": SUPABASE_KEY,
-            "Authorization": f"Bearer {SUPABASE_KEY}",
-        },
-        params={"agent_name": f"eq.{agent_name}", "order": "timestamp.desc"}
-    )
-    
-    return {
-        "success": True,
-        "agent_name": agent_name,
-        "count": len(response.json()),
-        "data": response.json()
-    }
-
-@app.get("/stats")
-async def get_stats(current_user: dict = Depends(require_role("ADMIN", "INSTRUCTOR", "ANALYST"))):
-    """Statistiques globales (ADMIN, INSTRUCTOR, ANALYST uniquement)"""
-    response = await httpx_client.get(
-        f"{SUPABASE_URL}/rest/v1/agent_logs?select=agent_name",
-        headers={
-            "apikey": SUPABASE_KEY,
-            "Authorization": f"Bearer {SUPABASE_KEY}",
+        "access_token": token,
+        "token_type": "bearer",
+        "user": {
+            "id": user["id"],
+            "email": user["email"],
+            "full_name": user["full_name"],
+            "role": user["role"]
         }
-    )
-    
-    logs = response.json()
-    agent_counts = {}
-    for log in logs:
-        agent = log.get("agent_name", "unknown")
-        agent_counts[agent] = agent_counts.get(agent, 0) + 1
-    
-    return {
-        "success": True,
-        "total_logs": len(logs),
-        "unique_agents": len(agent_counts),
-        "agents": agent_counts
     }
-
-# =====================================================
-# ROUTES : ADMINISTRATION (ADMIN UNIQUEMENT)
-# =====================================================
 
 @app.get("/admin/users")
-async def list_users(admin: dict = Depends(require_role("ADMIN"))):
-    """Liste tous les utilisateurs (ADMIN uniquement)"""
-    response = await httpx_client.get(
-        f"{SUPABASE_URL}/rest/v1/users",
-        headers={
-            "apikey": SUPABASE_KEY,
-            "Authorization": f"Bearer {SUPABASE_KEY}",
+async def list_users(admin: dict = Depends(require_admin)):
+    response = supabase.table("users").select("*").execute()
+    return {"users": response.data, "count": len(response.data)}
+
+@app.post("/activity")
+async def create_session(session: SessionCreate, user: dict = Depends(get_current_user)):
+    session_data = {
+        "session_id": session.session_id,
+        "user_id": session.user_id,
+        "agent_name": session.agent_name,
+        "status": session.status,
+        "progression_current": session.progression_current,
+        "progression_total": session.progression_total,
+        "progression_label": session.progression_label,
+        "metadata": session.metadata or {},
+        "started_at": datetime.utcnow().isoformat()
+    }
+    response = supabase.table("user_activity").insert(session_data).execute()
+    return {"success": True, "session": response.data[0]}
+
+@app.patch("/activity/{session_id}")
+async def update_session(session_id: str, update: SessionUpdate, user: dict = Depends(get_current_user)):
+    update_data = {k: v for k, v in update.dict(exclude_unset=True).items()}
+    update_data["updated_at"] = datetime.utcnow().isoformat()
+    response = supabase.table("user_activity").update(update_data).eq("session_id", session_id).execute()
+    return {"success": True, "session": response.data[0]}
+
+@app.post("/agent/session/start")
+async def agent_start(data: AgentSessionStart, _: bool = Depends(verify_agent_token)):
+    # Login admin interne
+    admin_pwd = os.getenv("ADMIN_PASSWORD", "CyrilAdmin2026!")
+    admin_resp = supabase.table("users").select("*").eq("email", ADMIN_EMAIL).execute()
+    admin = admin_resp.data[0]
+    
+    if not verify_password(admin_pwd, admin["password_hash"]):
+        raise HTTPException(status_code=500, detail="Erreur auth admin")
+    
+    # Trouver ou créer étudiant
+    student_resp = supabase.table("users").select("*").eq("email", data.student_email).execute()
+    
+    if not student_resp.data:
+        temp_pwd = f"temp_{uuid.uuid4().hex[:8]}"
+        hashed, salt = hash_password(temp_pwd)
+        student_data = {
+            "email": data.student_email,
+            "password_hash": hashed,
+            "salt": salt,
+            "full_name": data.student_email.split("@")[0].title(),
+            "role": "STUDENT",
+            "institution": "Club Photo",
+            "created_at": datetime.utcnow().isoformat()
         }
-    )
+        create_resp = supabase.table("users").insert(student_data).execute()
+        student = create_resp.data[0]
+    else:
+        student = student_resp.data[0]
     
-    users = response.json()
-    return [
-        {k: v for k, v in user.items() if k not in ["password_hash", "password_salt"]}
-        for user in users
-    ]
+    # Générer session_id
+    prefix = data.student_email.split("@")[0][:4].upper()
+    timestamp = datetime.utcnow().strftime("%Y%m%d")
+    suffix = uuid.uuid4().hex[:4].upper()
+    agent_prefix = {"photomentor_pro": "PHOTO", "coach_data": "COACH", "soda_opportunity": "SODA"}.get(data.agent_name, "AGENT")
+    session_id = f"{agent_prefix}-{timestamp}-{prefix}-{suffix}"
+    
+    # Créer session
+    session_data = {
+        "session_id": session_id,
+        "user_id": student["id"],
+        "agent_name": data.agent_name,
+        "status": "in_progress",
+        "progression_current": 0,
+        "progression_total": data.progression_total,
+        "progression_label": data.progression_label or "Session démarrée",
+        "metadata": data.metadata or {},
+        "started_at": datetime.utcnow().isoformat()
+    }
+    supabase.table("user_activity").insert(session_data).execute()
+    
+    return {"success": True, "session_id": session_id, "user_id": student["id"]}
 
-@app.post("/admin/users/{user_id}/role")
-async def change_role(
-    user_id: str,
-    data: dict,
-    admin: dict = Depends(require_role("ADMIN"))
-):
-    """Change le rôle d'un utilisateur (ADMIN uniquement)"""
-    new_role = data.get("role")
-    if new_role not in ["ADMIN", "INSTRUCTOR", "STUDENT", "ANALYST", "AGENT"]:
-        raise HTTPException(400, "Invalid role")
-    
-    response = await httpx_client.patch(
-        f"{SUPABASE_URL}/rest/v1/users",
-        headers={
-            "apikey": SUPABASE_KEY,
-            "Authorization": f"Bearer {SUPABASE_KEY}",
-            "Content-Type": "application/json",
-        },
-        params={"id": f"eq.{user_id}"},
-        json={"role": new_role}
-    )
-    
-    return {"success": True, "message": f"Role changed to {new_role}"}
+@app.patch("/agent/session/{session_id}")
+async def agent_update(session_id: str, data: AgentSessionUpdate, _: bool = Depends(verify_agent_token)):
+    update_data = {k: v for k, v in data.dict(exclude_unset=True).items()}
+    update_data["updated_at"] = datetime.utcnow().isoformat()
+    response = supabase.table("user_activity").update(update_data).eq("session_id", session_id).execute()
+    return {"success": True, "session": response.data[0]}
 
-# =====================================================
-# DÉMARRAGE
-# =====================================================
+@app.post("/agent/session/{session_id}/end")
+async def agent_end(session_id: str, data: AgentSessionEnd, _: bool = Depends(verify_agent_token)):
+    session_resp = supabase.table("user_activity").select("started_at").eq("session_id", session_id).execute()
+    started = datetime.fromisoformat(session_resp.data[0]["started_at"].replace('Z', '+00:00'))
+    completed = datetime.utcnow()
+    duration = int((completed - started).total_seconds() / 60)
+    
+    completion_data = {
+        "status": "completed",
+        "completed_at": completed.isoformat(),
+        "duration_minutes": duration,
+        "updated_at": completed.isoformat()
+    }
+    
+    if data.score is not None:
+        completion_data["score"] = data.score
+    if data.strengths:
+        completion_data["strengths"] = data.strengths
+    if data.improvements:
+        completion_data["improvements"] = data.improvements
+    if data.metadata:
+        completion_data["metadata"] = data.metadata
+    
+    response = supabase.table("user_activity").update(completion_data).eq("session_id", session_id).execute()
+    return {"success": True, "session": response.data[0], "duration_minutes": duration}
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
-
-# =====================================================
-# ROUTES : USER ACTIVITY (TRACKING PÉDAGOGIQUE)
-# =====================================================
-
-@app.post("/activity", status_code=201)
-async def create_activity(
-    data: dict,
-    current_user: dict = Depends(get_current_user)
-):
-    """Créer une nouvelle session d'activité"""
-    required_fields = ["session_id", "agent_name", "started_at", "status"]
-    for field in required_fields:
-        if field not in data:
-            raise HTTPException(400, f"Missing required field: {field}")
-    
-    if "user_id" not in data:
-        data["user_id"] = current_user["id"]
-    
-    if current_user["role"] not in ["ADMIN", "INSTRUCTOR"] and data["user_id"] != current_user["id"]:
-        raise HTTPException(403, "Cannot create activity for another user")
-    
-    response = await httpx_client.post(
-        f"{SUPABASE_URL}/rest/v1/user_activity",
-        headers={
-            "apikey": SUPABASE_KEY,
-            "Authorization": f"Bearer {SUPABASE_KEY}",
-            "Content-Type": "application/json",
-            "Prefer": "return=representation"
-        },
-        json=data
-    )
-    
-    if response.status_code != 201:
-        raise HTTPException(500, f"Failed to create activity: {response.text}")
-    
-    return {"success": True, "data": response.json()[0]}
-
-
-@app.get("/activity/student/{user_id}")
-async def get_student_activities(
-    user_id: str,
-    agent_name: str = None,
-    limit: int = 50,
-    current_user: dict = Depends(get_current_user)
-):
-    """Récupérer les activités d'un étudiant"""
-    if current_user["role"] not in ["ADMIN", "INSTRUCTOR", "ANALYST"] and current_user["id"] != user_id:
-        raise HTTPException(403, "Cannot view other students' activities")
-    
-    params = {
-        "user_id": f"eq.{user_id}",
-        "order": "started_at.desc",
-        "limit": str(limit)
-    }
-    
-    if agent_name:
-        params["agent_name"] = f"eq.{agent_name}"
-    
-    response = await httpx_client.get(
-        f"{SUPABASE_URL}/rest/v1/user_activity",
-        headers={
-            "apikey": SUPABASE_KEY,
-            "Authorization": f"Bearer {SUPABASE_KEY}",
-        },
-        params=params
-    )
-    
-    return {"success": True, "count": len(response.json()), "data": response.json()}
-
-
-@app.patch("/activity/{session_id}")
-async def update_activity(
-    session_id: str,
-    data: dict,
-    current_user: dict = Depends(get_current_user)
-):
-    """Mettre à jour une session"""
-    check_response = await httpx_client.get(
-        f"{SUPABASE_URL}/rest/v1/user_activity",
-        headers={
-            "apikey": SUPABASE_KEY,
-            "Authorization": f"Bearer {SUPABASE_KEY}",
-        },
-        params={"session_id": f"eq.{session_id}"}
-    )
-    
-    sessions = check_response.json()
-    if not sessions:
-        raise HTTPException(404, "Session not found")
-    
-    session = sessions[0]
-    
-    if current_user["role"] not in ["ADMIN", "INSTRUCTOR"] and session["user_id"] != current_user["id"]:
-        raise HTTPException(403, "Cannot update another user's session")
-    
-    response = await httpx_client.patch(
-        f"{SUPABASE_URL}/rest/v1/user_activity",
-        headers={
-            "apikey": SUPABASE_KEY,
-            "Authorization": f"Bearer {SUPABASE_KEY}",
-            "Content-Type": "application/json",
-            "Prefer": "return=representation"
-        },
-        params={"session_id": f"eq.{session_id}"},
-        json=data
-    )
-    
-    if response.status_code != 200:
-        raise HTTPException(500, f"Failed to update activity: {response.text}")
-    
-    return {"success": True, "data": response.json()[0] if response.json() else None}
-
-
-@app.get("/activity/progress/{user_id}/{agent_name}")
-async def get_progress(
-    user_id: str,
-    agent_name: str,
-    current_user: dict = Depends(get_current_user)
-):
-    """Obtenir la progression d'un étudiant sur un agent"""
-    if current_user["role"] not in ["ADMIN", "INSTRUCTOR", "ANALYST"] and current_user["id"] != user_id:
-        raise HTTPException(403, "Cannot view other students' progress")
-    
-    response = await httpx_client.post(
-        f"{SUPABASE_URL}/rest/v1/rpc/get_student_progression",
-        headers={
-            "apikey": SUPABASE_KEY,
-            "Authorization": f"Bearer {SUPABASE_KEY}",
-            "Content-Type": "application/json"
-        },
-        json={
-            "p_user_id": user_id,
-            "p_agent_name": agent_name
-        }
-    )
-    
-    if response.status_code != 200:
-        raise HTTPException(500, f"Failed to get progression: {response.text}")
-    
-    result = response.json()
-    
-    return {
-        "success": True,
-        "user_id": user_id,
-        "agent_name": agent_name,
-        "data": result[0] if result else {
-            "session_count": 0,
-            "last_session": None,
-            "current_level": None,
-            "avg_score": None,
-            "total_duration": 0
-        }
-    }
-
-
-@app.get("/activity/stats")
-async def get_activity_stats(
-    current_user: dict = Depends(require_role("ADMIN", "INSTRUCTOR", "ANALYST"))
-):
-    """Statistiques globales (vue v_agent_stats)"""
-    response = await httpx_client.get(
-        f"{SUPABASE_URL}/rest/v1/v_agent_stats",
-        headers={
-            "apikey": SUPABASE_KEY,
-            "Authorization": f"Bearer {SUPABASE_KEY}",
-        }
-    )
-    
-    return {"success": True, "data": response.json()}
-
-
-@app.get("/activity/recent")
-async def get_recent_activities(
-    limit: int = 20,
-    current_user: dict = Depends(require_role("ADMIN", "INSTRUCTOR"))
-):
-    """Sessions récentes (vue v_recent_sessions)"""
-    response = await httpx_client.get(
-        f"{SUPABASE_URL}/rest/v1/v_recent_sessions",
-        headers={
-            "apikey": SUPABASE_KEY,
-            "Authorization": f"Bearer {SUPABASE_KEY}",
-        },
-        params={"limit": str(limit)}
-    )
-    
-    return {"success": True, "count": len(response.json()), "data": response.json()}
-
-
-@app.get("/activity/students/progress")
-async def get_all_students_progress(
-    current_user: dict = Depends(require_role("ADMIN", "INSTRUCTOR"))
-):
-    """Progression de tous les étudiants (vue v_student_progress)"""
-    response = await httpx_client.get(
-        f"{SUPABASE_URL}/rest/v1/v_student_progress",
-        headers={
-            "apikey": SUPABASE_KEY,
-            "Authorization": f"Bearer {SUPABASE_KEY}",
-        },
-        params={"order": "last_session.desc"}
-    )
-    
-    return {"success": True, "count": len(response.json()), "data": response.json()}
-# ============================================================================
-# ENDPOINTS AGENTS SÉCURISÉS
-# ============================================================================
-
-from typing import Optional, List
-from pydantic import BaseModel, EmailStr
-
-# Token secret agent (à mettre dans variables d'environnement)
-AGENT_SECRET_TOKEN = os.getenv("AGENT_SECRET_TOKEN", "AGENT_TOKEN_PHOTOMENTOR_2026")
-
-# Modèles Pydantic
-class AgentSessionStart(BaseModel):
-    student_email: EmailStr
-    agent_name: str
-    progression_total: int = 5
-    progression_label: Optional[str] = "Session démarrée"
-    metadata: Optional[dict] = {}
-
-class AgentSessionUpdate(BaseModel):
-    progression_current: Optional[int] = None
-    progression_label: Optional[str] = None
-    strengths: Optional[List[str]] = None
-    improvements: Optional[List[str]] = None
-    metadata: Optional[dict] = None
-
-class AgentSessionEnd(BaseModel):
-    score: float
-    completion_rate: float = 1.0
-    next_step: Optional[str] = None
-    strengths: Optional[List[str]] = None
-    improvements: Optional[List[str]] = None
-    metadata: Optional[dict] = None
-
-# Vérification token agent
-def verify_agent_token(x_agent_token: str = Header(...)):
-    if x_agent_token != AGENT_SECRET_TOKEN:
-        raise HTTPException(status_code=401, detail="Invalid agent token")
-    return True
-
-# ENDPOINT 1 : Démarrer session
-@app.post("/agent/session/start")
-async def agent_start_session(
-    data: AgentSessionStart,
-    verified: bool = Depends(verify_agent_token)
-):
-    """Démarrer une session pour un étudiant"""
-    try:
-        # 1. Trouver ou créer l'utilisateur
-        user_query = supabase.table("users").select("*").eq("email", data.student_email).execute()
-        
-        if len(user_query.data) == 0:
-            # Créer l'utilisateur
-            new_user = {
-                "id": str(uuid.uuid4()),
-                "email": data.student_email,
-                "password_hash": generate_password_hash("TempPassword2026!"),
-                "full_name": "Étudiant",
-                "role": "STUDENT",
-                "institution": "Grande École",
-                "is_active": True
-            }
-            supabase.table("users").insert(new_user).execute()
-            user_id = new_user["id"]
-        else:
-            user_id = user_query.data[0]["id"]
-        
-        # 2. Générer session_id
-        prefix_map = {
-            "photomentor_pro": "PHOTO",
-            "soda_opportunity": "SODA",
-            "data_analyst_coach": "COACH"
-        }
-        prefix = prefix_map.get(data.agent_name, "SESSION")
-        email_prefix = data.student_email.split('@')[0].upper()[:4]
-        timestamp = datetime.now().strftime('%Y%m%d')
-        random_suffix = str(uuid.uuid4())[:4].upper()
-        session_id = f"{prefix}-{timestamp}-{email_prefix}-{random_suffix}"
-        
-        # 3. Créer la session
-        session_data = {
-            "session_id": session_id,
-            "user_id": user_id,
-            "agent_name": data.agent_name,
-            "started_at": datetime.utcnow().isoformat(),
-            "status": "in_progress",
-            "progression_current": 1,
-            "progression_total": data.progression_total,
-            "progression_label": data.progression_label,
-            "metadata": data.metadata
-        }
-        supabase.table("user_activity").insert(session_data).execute()
-        
-        return {
-            "success": True,
-            "session_id": session_id,
-            "user_id": user_id,
-            "message": f"Session créée pour {data.student_email}"
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-# ENDPOINT 2 : Mettre à jour session
-@app.patch("/agent/session/{session_id}")
-async def agent_update_session(
-    session_id: str,
-    data: AgentSessionUpdate,
-    verified: bool = Depends(verify_agent_token)
-):
-    """Mettre à jour une session"""
-    try:
-        update_data = {"updated_at": datetime.utcnow().isoformat()}
-        
-        if data.progression_current: update_data["progression_current"] = data.progression_current
-        if data.progression_label: update_data["progression_label"] = data.progression_label
-        if data.strengths: update_data["strengths"] = data.strengths
-        if data.improvements: update_data["improvements"] = data.improvements
-        if data.metadata: update_data["metadata"] = data.metadata
-        
-        result = supabase.table("user_activity").update(update_data).eq("session_id", session_id).execute()
-        
-        if len(result.data) == 0:
-            raise HTTPException(status_code=404, detail="Session non trouvée")
-        
-        return {"success": True, "session_id": session_id}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-# ENDPOINT 3 : Terminer session
-@app.post("/agent/session/{session_id}/end")
-async def agent_end_session(
-    session_id: str,
-    data: AgentSessionEnd,
-    verified: bool = Depends(verify_agent_token)
-):
-    """Terminer une session"""
-    try:
-        session_query = supabase.table("user_activity").select("*").eq("session_id", session_id).execute()
-        
-        if len(session_query.data) == 0:
-            raise HTTPException(status_code=404, detail="Session non trouvée")
-        
-        session = session_query.data[0]
-        
-        end_data = {
-            "status": "completed",
-            "completed_at": datetime.utcnow().isoformat(),
-            "progression_current": session["progression_total"],
-            "completion_rate": data.completion_rate,
-            "score": data.score,
-            "updated_at": datetime.utcnow().isoformat()
-        }
-        
-        if data.next_step: end_data["next_step"] = data.next_step
-        if data.strengths: end_data["strengths"] = data.strengths
-        if data.improvements: end_data["improvements"] = data.improvements
-        if data.metadata: end_data["metadata"] = data.metadata
-        
-        supabase.table("user_activity").update(end_data).eq("session_id", session_id).execute()
-        
-        return {"success": True, "session_id": session_id, "score": data.score}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    port = int(os.getenv("PORT", 8000))
+    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=True)
