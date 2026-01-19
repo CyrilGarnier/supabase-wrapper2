@@ -1,45 +1,29 @@
 """
-=====================================================
-BaseGenspark API - Version 2.1 avec Endpoints Agents
-Ajout : 3 endpoints sécurisés pour agents pédagogiques
-=====================================================
+BaseGenspark API v2.1 - FIXED with STUDENTS table
+Pedagogical tracking with clean separation
 """
-
 import os
 import httpx
 import bcrypt
 import jwt
-import uuid
 from datetime import datetime, timedelta
-from fastapi import FastAPI, HTTPException, Depends, Header, Request
+from typing import Optional, Dict, Any, List
+from fastapi import FastAPI, HTTPException, Depends, Header
 from fastapi.middleware.cors import CORSMiddleware
-from typing import Optional, List, Dict, Any
 from pydantic import BaseModel
 
-# =====================================================
+# ============================================================================
 # CONFIGURATION
-# =====================================================
-
-SUPABASE_URL = "https://iepvmuzfdkklysnqbvwt.supabase.co"
-SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImllcHZtdXpmZGtrbHlzbnFidnd0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njg3MTM0NDEsImV4cCI6MjA4NDI4OTQ0MX0.N_veJeUbrCVmW5eHMqCvMvwZb6LD-7cJ9NFa8aCGPIY"
-
-JWT_SECRET = os.getenv("JWT_SECRET", "basegenspark_secret_2026_change_me_in_production")
+# ============================================================================
+SUPABASE_URL = os.getenv("SUPABASE_URL", "https://iepvmuzfdkklysnqbvwt.supabase.co")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
+AGENT_SECRET_TOKEN = os.getenv("AGENT_SECRET_TOKEN", "AGENT_TOKEN_PHOTOMENTOR_2026")
+JWT_SECRET = os.getenv("JWT_SECRET", "basegenspark_secret_2026")
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRATION_HOURS = 24
 
-AGENT_SECRET_TOKEN = os.getenv("AGENT_SECRET_TOKEN", "AGENT_TOKEN_PHOTOMENTOR_2026")
-
-ADMIN_EMAIL = "cyril@alkymya.co"
-
-# HTTP Client
-httpx_client = httpx.AsyncClient(timeout=30.0)
-
-# FastAPI
-app = FastAPI(
-    title="BaseGenspark API",
-    version="2.1.0",
-    description="API sécurisée avec endpoints agents pédagogiques"
-)
+app = FastAPI(title="BaseGenspark API", version="2.1-STUDENTS")
+httpx_client = httpx.Client()
 
 # CORS
 app.add_middleware(
@@ -50,10 +34,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# =====================================================
-# MODELS PYDANTIC
-# =====================================================
-
+# ============================================================================
+# MODELS
+# ============================================================================
 class AgentSessionStart(BaseModel):
     student_email: str
     agent_name: str
@@ -73,321 +56,123 @@ class AgentSessionEnd(BaseModel):
     improvements: Optional[List[str]] = None
     metadata: Optional[Dict[str, Any]] = None
 
-# =====================================================
-# SECURITY UTILITIES
-# =====================================================
+# ============================================================================
+# AUTH HELPERS
+# ============================================================================
+def verify_agent_token(x_agent_token: Optional[str] = Header(None)):
+    """Vérifier le token agent"""
+    if not x_agent_token or x_agent_token != AGENT_SECRET_TOKEN:
+        raise HTTPException(status_code=401, detail="Token agent invalide")
+    return True
 
-def hash_password(password: str) -> tuple[str, str]:
-    """Hash un mot de passe avec bcrypt"""
-    salt = bcrypt.gensalt(rounds=12)
-    password_bytes = password.encode('utf-8')
-    hashed = bcrypt.hashpw(password_bytes, salt)
-    return hashed.decode('utf-8'), salt.decode('utf-8')
-
-def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """Vérifie un mot de passe"""
-    try:
-        return bcrypt.checkpw(
-            plain_password.encode('utf-8'),
-            hashed_password.encode('utf-8')
-        )
-    except Exception:
-        return False
-
-def create_jwt_token(user_data: dict) -> str:
-    """Crée un JWT token"""
-    payload = {
-        "user_id": user_data["id"],
-        "email": user_data["email"],
-        "role": user_data["role"],
-        "exp": datetime.utcnow() + timedelta(hours=JWT_EXPIRATION_HOURS),
-        "iat": datetime.utcnow()
+# ============================================================================
+# ENDPOINTS
+# ============================================================================
+@app.get("/")
+async def root():
+    return {
+        "message": "BaseGenspark API v2.1-STUDENTS",
+        "status": "operational",
+        "agent_endpoints": True
     }
-    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
 
-def decode_jwt_token(token: str) -> dict:
-    """Décode et valide un JWT token"""
+@app.get("/health")
+async def health():
     try:
-        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
-        return payload
-    except jwt.ExpiredSignatureError:
-        raise HTTPException(401, "Token expiré")
-    except jwt.InvalidTokenError:
-        raise HTTPException(401, "Token invalide")
-
-async def get_current_user(authorization: Optional[str] = Header(None)) -> dict:
-    """Récupère l'utilisateur courant depuis le token JWT"""
-    if not authorization:
-        raise HTTPException(401, "Token manquant")
+        response = httpx_client.get(
+            f"{SUPABASE_URL}/rest/v1/students?select=count",
+            headers={"apikey": SUPABASE_KEY}
+        )
+        supabase_status = "connected" if response.status_code == 200 else "error"
+    except:
+        supabase_status = "error"
     
+    return {
+        "status": "healthy",
+        "supabase": supabase_status,
+        "timestamp": datetime.utcnow().isoformat()
+    }
+
+# ============================================================================
+# AGENT ENDPOINTS
+# ============================================================================
+@app.post("/agent/session/start")
+async def agent_session_start(
+    data: AgentSessionStart,
+    authenticated: bool = Depends(verify_agent_token)
+):
+    """Démarrer une session pédagogique"""
     try:
-        scheme, token = authorization.split()
-        if scheme.lower() != "bearer":
-            raise HTTPException(401, "Schéma d'authentification invalide")
-        
-        payload = decode_jwt_token(token)
-        
-        response = await httpx_client.get(
-            f"{SUPABASE_URL}/rest/v1/users?id=eq.{payload['user_id']}&select=*",
+        # 1️⃣ Trouver ou créer l'étudiant dans la table STUDENTS
+        response = httpx_client.get(
+            f"{SUPABASE_URL}/rest/v1/students?email=eq.{data.student_email}&select=*",
             headers={
                 "apikey": SUPABASE_KEY,
                 "Authorization": f"Bearer {SUPABASE_KEY}"
             }
         )
         
-        if response.status_code != 200 or not response.json():
-            raise HTTPException(401, "Utilisateur introuvable")
-        
-        return response.json()[0]
-    
-    except ValueError:
-        raise HTTPException(401, "Format de token invalide")
-
-async def verify_agent_token(x_agent_token: Optional[str] = Header(None)) -> bool:
-    """Vérifie le token agent"""
-    if not x_agent_token or x_agent_token != AGENT_SECRET_TOKEN:
-        raise HTTPException(401, "Token agent invalide")
-    return True
-
-# =====================================================
-# ENDPOINTS - ROOT & HEALTH
-# =====================================================
-
-@app.get("/")
-async def root():
-    return {
-        "service": "BaseGenspark API",
-        "version": "2.1.0",
-        "status": "operational",
-        "features": {
-            "authentication": "JWT + bcrypt",
-            "rbac": "5 roles (ADMIN, INSTRUCTOR, STUDENT, ANALYST, AGENT)",
-            "agent_endpoints": True,
-            "rgpd_compliant": True
-        },
-        "endpoints": {
-            "auth": ["/auth/register", "/auth/login", "/auth/me"],
-            "logs": ["/logs", "/logs/{id}", "/logs/agent/{name}", "/logs/recent"],
-            "stats": ["/stats"],
-            "admin": ["/admin/users", "/admin/users/{id}/role"],
-            "agents": ["/agent/session/start", "/agent/session/{id}", "/agent/session/{id}/end"]
-        },
-        "documentation": "/docs"
-    }
-
-@app.get("/health")
-async def health_check():
-    try:
-        response = await httpx_client.get(
-            f"{SUPABASE_URL}/rest/v1/users?select=count&limit=1",
-            headers={"apikey": SUPABASE_KEY}
-        )
-        supabase_status = "connected" if response.status_code == 200 else "disconnected"
-    except:
-        supabase_status = "disconnected"
-    
-    return {
-        "status": "healthy" if supabase_status == "connected" else "unhealthy",
-        "supabase": supabase_status,
-        "timestamp": datetime.utcnow().isoformat()
-    }
-
-# =====================================================
-# ENDPOINTS - AUTH (garder l'existant)
-# =====================================================
-
-@app.post("/auth/register")
-async def register(request: Request):
-    data = await request.json()
-    
-    # Vérifier si l'email existe
-    response = await httpx_client.get(
-        f"{SUPABASE_URL}/rest/v1/users?email=eq.{data['email']}&select=id",
-        headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
-    )
-    
-    if response.status_code == 200 and response.json():
-        raise HTTPException(400, "Email déjà utilisé")
-    
-    # Hash password
-    hashed_password, salt = hash_password(data["password"])
-    
-    user_data = {
-        "email": data["email"],
-        "password_hash": hashed_password,
-        "salt": salt,
-        "name": data.get("name", data["email"].split("@")[0]),
-        "role": data.get("role", "STUDENT"),
-        "institution": data.get("institution"),
-        "created_at": datetime.utcnow().isoformat()
-    }
-    
-    response = await httpx_client.post(
-        f"{SUPABASE_URL}/rest/v1/users",
-        headers={
-            "apikey": SUPABASE_KEY,
-            "Authorization": f"Bearer {SUPABASE_KEY}",
-            "Content-Type": "application/json",
-            "Prefer": "return=representation"
-        },
-        json=user_data
-    )
-    
-    if response.status_code != 201:
-        raise HTTPException(500, "Erreur lors de la création de l'utilisateur")
-    
-    created_user = response.json()[0]
-    token = create_jwt_token(created_user)
-    
-    return {
-        "access_token": token,
-        "token_type": "bearer",
-        "user": {
-            "id": created_user["id"],
-            "email": created_user["email"],
-            "name": created_user["name"],
-            "role": created_user["role"]
-        }
-    }
-
-@app.post("/auth/login")
-async def login(request: Request):
-    data = await request.json()
-    
-    response = await httpx_client.get(
-        f"{SUPABASE_URL}/rest/v1/users?email=eq.{data['email']}&select=*",
-        headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
-    )
-    
-    if response.status_code != 200 or not response.json():
-        raise HTTPException(401, "Email ou mot de passe incorrect")
-    
-    user = response.json()[0]
-    
-    if not verify_password(data["password"], user["password_hash"]):
-        raise HTTPException(401, "Email ou mot de passe incorrect")
-    
-    # Enregistrer login
-    await httpx_client.post(
-        f"{SUPABASE_URL}/rest/v1/login_history",
-        headers={
-            "apikey": SUPABASE_KEY,
-            "Authorization": f"Bearer {SUPABASE_KEY}",
-            "Content-Type": "application/json"
-        },
-        json={
-            "user_id": user["id"],
-            "login_at": datetime.utcnow().isoformat()
-        }
-    )
-    
-    token = create_jwt_token(user)
-    
-    return {
-        "access_token": token,
-        "token_type": "bearer",
-        "user": {
-            "id": user["id"],
-            "email": user["email"],
-            "name": user["name"],
-            "role": user["role"],
-            "consent_given": user.get("consent_given"),
-            "consent_date": user.get("consent_date"),
-            "consent_version": user.get("consent_version"),
-            "promotion": user.get("promotion"),
-            "institution": user.get("institution"),
-            "country": user.get("country"),
-            "metadata": user.get("metadata", {}),
-            "created_at": user.get("created_at"),
-            "updated_at": user.get("updated_at"),
-            "last_activity_at": user.get("last_activity_at"),
-            "last_login_at": user.get("last_login_at"),
-            "deleted_at": user.get("deleted_at"),
-            "is_active": user.get("is_active", True)
-        }
-    }
-
-# =====================================================
-# ENDPOINTS - AGENTS PÉDAGOGIQUES (NOUVEAUX)
-# =====================================================
-
-@app.post("/agent/session/start")
-async def agent_session_start(
-    data: AgentSessionStart,
-    _: bool = Depends(verify_agent_token)
-):
-    """
-    Démarrer une nouvelle session pour un agent pédagogique
-    Authentification : X-Agent-Token header
-    """
-    try:
-        # 1. Trouver ou créer l'étudiant
-        response = await httpx_client.get(
-            f"{SUPABASE_URL}/rest/v1/users?email=eq.{data.student_email}&select=*",
-            headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
-        )
-        
         if response.status_code == 200 and response.json():
             student = response.json()[0]
+            student_id = student["id"]
         else:
-            # Créer l'étudiant
-            temp_pwd = f"temp_{uuid.uuid4().hex[:8]}"
-            hashed, salt = hash_password(temp_pwd)
-            
-            student_data = {
+            # Créer un nouvel étudiant
+            full_name = data.student_email.split("@")[0].replace(".", " ").title()
+            new_student = {
                 "email": data.student_email,
-                "password_hash": hashed,
-                "salt": salt,
-                "name": data.student_email.split("@")[0].title(),
-                "role": "STUDENT",
-                "institution": "Club Photo / Grande École",
-                "created_at": datetime.utcnow().isoformat()
+                "full_name": full_name,
+                "institution": "Club Photo",
+                "role": "STUDENT"
             }
             
-            create_resp = await httpx_client.post(
-                f"{SUPABASE_URL}/rest/v1/users",
+            response = httpx_client.post(
+                f"{SUPABASE_URL}/rest/v1/students",
                 headers={
                     "apikey": SUPABASE_KEY,
                     "Authorization": f"Bearer {SUPABASE_KEY}",
                     "Content-Type": "application/json",
                     "Prefer": "return=representation"
                 },
-                json=student_data
+                json=new_student
             )
             
-            if create_resp.status_code != 201:
-                raise HTTPException(500, "Impossible de créer l'étudiant")
+            if response.status_code not in [200, 201]:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Impossible de créer l'étudiant: {response.text}"
+                )
             
-            student = create_resp.json()[0]
+            student = response.json()[0]
+            student_id = student["id"]
         
-        # 2. Générer session_id
-        prefix = data.student_email.split("@")[0][:4].upper()
-        timestamp = datetime.utcnow().strftime("%Y%m%d")
-        suffix = uuid.uuid4().hex[:4].upper()
-        
+        # 2️⃣ Générer un session_id unique
         agent_prefix_map = {
             "photomentor_pro": "PHOTO",
-            "coach_data": "COACH",
+            "data_analyst_coach": "COACH",
             "soda_opportunity": "SODA"
         }
-        agent_prefix = agent_prefix_map.get(data.agent_name, "AGENT")
-        session_id = f"{agent_prefix}-{timestamp}-{prefix}-{suffix}"
+        prefix = agent_prefix_map.get(data.agent_name, "AGENT")
+        timestamp = datetime.utcnow().strftime("%Y%m%d")
+        student_prefix = data.student_email.split("@")[0][:4].upper()
         
-        # 3. Créer la session dans user_activity
+        import uuid
+        suffix = uuid.uuid4().hex[:4].upper()
+        session_id = f"{prefix}-{timestamp}-{student_prefix}-{suffix}"
+        
+        # 3️⃣ Créer la session dans user_activity
         session_data = {
             "session_id": session_id,
-            "user_id": student["id"],
+            "student_id": student_id,
             "agent_name": data.agent_name,
             "status": "in_progress",
             "progression_current": 0,
             "progression_total": data.progression_total,
-            "progression_label": data.progression_label or "Session démarrée",
+            "progression_label": data.progression_label,
             "metadata": data.metadata or {},
-            "started_at": datetime.utcnow().isoformat(),
-            "created_at": datetime.utcnow().isoformat()
+            "started_at": datetime.utcnow().isoformat()
         }
         
-        activity_resp = await httpx_client.post(
+        response = httpx_client.post(
             f"{SUPABASE_URL}/rest/v1/user_activity",
             headers={
                 "apikey": SUPABASE_KEY,
@@ -398,158 +183,153 @@ async def agent_session_start(
             json=session_data
         )
         
-        if activity_resp.status_code != 201:
-            raise HTTPException(500, "Impossible de créer la session")
+        if response.status_code not in [200, 201]:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Impossible de créer la session: {response.text}"
+            )
         
         return {
             "success": True,
             "session_id": session_id,
-            "user_id": student["id"],
-            "student_name": student["name"],
-            "message": f"Session créée pour {student['name']}"
+            "student_id": student_id,
+            "student_name": student["full_name"],
+            "message": f"Session créée pour {student['full_name']}"
         }
-    
+        
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(500, f"Erreur: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.patch("/agent/session/{session_id}")
 async def agent_session_update(
     session_id: str,
     data: AgentSessionUpdate,
-    _: bool = Depends(verify_agent_token)
+    authenticated: bool = Depends(verify_agent_token)
 ):
-    """
-    Mettre à jour une session en cours
-    Authentification : X-Agent-Token header
-    """
+    """Mettre à jour une session"""
     try:
-        update_data = {}
+        update_data = {"updated_at": datetime.utcnow().isoformat()}
         
         if data.progression_current is not None:
             update_data["progression_current"] = data.progression_current
-        if data.progression_label is not None:
+        if data.progression_label:
             update_data["progression_label"] = data.progression_label
         if data.resources_count is not None:
             update_data["resources_count"] = data.resources_count
-        if data.metadata is not None:
+        if data.metadata:
             update_data["metadata"] = data.metadata
         
-        update_data["updated_at"] = datetime.utcnow().isoformat()
-        
-        response = await httpx_client.patch(
+        response = httpx_client.patch(
             f"{SUPABASE_URL}/rest/v1/user_activity?session_id=eq.{session_id}",
             headers={
                 "apikey": SUPABASE_KEY,
                 "Authorization": f"Bearer {SUPABASE_KEY}",
-                "Content-Type": "application/json",
-                "Prefer": "return=representation"
+                "Content-Type": "application/json"
             },
             json=update_data
         )
         
-        if response.status_code != 200 or not response.json():
-            raise HTTPException(404, "Session introuvable")
+        if response.status_code not in [200, 204]:
+            raise HTTPException(status_code=500, detail="Échec de la mise à jour")
         
-        return {
-            "success": True,
-            "session": response.json()[0]
-        }
-    
+        return {"success": True, "session_id": session_id, "updated": update_data}
+        
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(500, f"Erreur: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/agent/session/{session_id}/end")
 async def agent_session_end(
     session_id: str,
     data: AgentSessionEnd,
-    _: bool = Depends(verify_agent_token)
+    authenticated: bool = Depends(verify_agent_token)
 ):
-    """
-    Clôturer une session avec score et feedback
-    Authentification : X-Agent-Token header
-    """
+    """Clôturer une session"""
     try:
-        # Récupérer la session pour calculer la durée
-        response = await httpx_client.get(
-            f"{SUPABASE_URL}/rest/v1/user_activity?session_id=eq.{session_id}&select=started_at",
-            headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
+        # Récupérer la session
+        response = httpx_client.get(
+            f"{SUPABASE_URL}/rest/v1/user_activity?session_id=eq.{session_id}&select=*",
+            headers={
+                "apikey": SUPABASE_KEY,
+                "Authorization": f"Bearer {SUPABASE_KEY}"
+            }
         )
         
         if response.status_code != 200 or not response.json():
-            raise HTTPException(404, "Session introuvable")
+            raise HTTPException(status_code=404, detail="Session introuvable")
         
-        started_str = response.json()[0]["started_at"]
-        started = datetime.fromisoformat(started_str.replace('Z', '+00:00').replace('+00:00', ''))
-        completed = datetime.utcnow()
-        duration = int((completed - started).total_seconds() / 60)
+        session = response.json()[0]
+        started_at = datetime.fromisoformat(session["started_at"].replace("Z", "+00:00"))
+        completed_at = datetime.utcnow()
+        duration_minutes = int((completed_at - started_at).total_seconds() / 60)
         
-        completion_data = {
+        update_data = {
             "status": "completed",
-            "completed_at": completed.isoformat(),
-            "duration_minutes": duration,
-            "updated_at": completed.isoformat()
+            "completed_at": completed_at.isoformat(),
+            "duration_minutes": duration_minutes,
+            "updated_at": completed_at.isoformat()
         }
         
         if data.score is not None:
-            completion_data["score"] = data.score
+            update_data["score"] = data.score
         if data.strengths:
-            completion_data["strengths"] = data.strengths
+            update_data["strengths"] = data.strengths
         if data.improvements:
-            completion_data["improvements"] = data.improvements
+            update_data["improvements"] = data.improvements
         if data.metadata:
-            completion_data["metadata"] = data.metadata
+            update_data["metadata"] = data.metadata
         
-        update_resp = await httpx_client.patch(
+        response = httpx_client.patch(
             f"{SUPABASE_URL}/rest/v1/user_activity?session_id=eq.{session_id}",
             headers={
                 "apikey": SUPABASE_KEY,
                 "Authorization": f"Bearer {SUPABASE_KEY}",
-                "Content-Type": "application/json",
-                "Prefer": "return=representation"
+                "Content-Type": "application/json"
             },
-            json=completion_data
+            json=update_data
         )
         
-        if update_resp.status_code != 200 or not update_resp.json():
-            raise HTTPException(404, "Session introuvable")
+        if response.status_code not in [200, 204]:
+            raise HTTPException(status_code=500, detail="Échec de clôture")
         
         return {
             "success": True,
-            "session": update_resp.json()[0],
-            "duration_minutes": duration
+            "session_id": session_id,
+            "duration_minutes": duration_minutes,
+            "completed_at": completed_at.isoformat()
         }
-    
+        
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(500, f"Erreur: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
-# =====================================================
-# STARTUP/SHUTDOWN
-# =====================================================
+# ============================================================================
+# ADMIN ENDPOINTS (pour l'Agent Superviseur)
+# ============================================================================
+@app.get("/admin/students")
+async def admin_list_students():
+    """Lister tous les étudiants"""
+    response = httpx_client.get(
+        f"{SUPABASE_URL}/rest/v1/students?select=*&order=created_at.desc",
+        headers={
+            "apikey": SUPABASE_KEY,
+            "Authorization": f"Bearer {SUPABASE_KEY}"
+        }
+    )
+    return response.json() if response.status_code == 200 else []
 
-@app.on_event("startup")
-async def startup():
-    print("🚀 BaseGenspark API v2.1 démarrée")
-    print(f"📊 Supabase: {SUPABASE_URL}")
-    print(f"🔐 JWT expiration: {JWT_EXPIRATION_HOURS}h")
-    print(f"🤖 Agent endpoints: ACTIVÉS")
-
-@app.on_event("shutdown")
-async def shutdown():
-    await httpx_client.aclose()
-    print("🛑 BaseGenspark API v2.1 arrêtée")
-
-# =====================================================
-# MAIN
-# =====================================================
-
-if __name__ == "__main__":
-    import uvicorn
-    port = int(os.getenv("PORT", 8000))
-    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=True)
-
+@app.get("/admin/sessions")
+async def admin_list_sessions():
+    """Lister toutes les sessions"""
+    response = httpx_client.get(
+        f"{SUPABASE_URL}/rest/v1/user_activity?select=*&order=started_at.desc&limit=100",
+        headers={
+            "apikey": SUPABASE_KEY,
+            "Authorization": f"Bearer {SUPABASE_KEY}"
+        }
+    )
+    return response.json() if response.status_code == 200 else []
