@@ -59,9 +59,13 @@ class AgentSessionEnd(BaseModel):
 # ============================================================================
 # AUTH HELPERS
 # ============================================================================
-def verify_agent_token(x_agent_token: Optional[str] = Header(None)):
-    """Vérifier le token agent"""
-    if not x_agent_token or x_agent_token != AGENT_SECRET_TOKEN:
+def verify_agent_token(
+    x_agent_token: Optional[str] = Header(None),
+    token: Optional[str] = None
+):
+    """Vérifier le token agent (header OU query parameter)"""
+    provided_token = x_agent_token or token
+    if not provided_token or provided_token != AGENT_SECRET_TOKEN:
         raise HTTPException(status_code=401, detail="Token agent invalide")
     return True
 
@@ -334,3 +338,4 @@ async def admin_list_sessions():
         }
     )
     return response.json() if response.status_code == 200 else []
+
