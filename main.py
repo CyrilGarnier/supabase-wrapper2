@@ -527,10 +527,10 @@ async def get_planning_conflicts(
         }
         
         if resolved is not None:
-    if resolved:
-        params["resolved_at"] = "not.is.null"
-    else:
-        params["resolved_at"] = "is.null"
+            if resolved:
+                params["resolved_at"] = "not.is.null"
+            else:
+                params["resolved_at"] = "is.null"
         
         response = supabase_request("GET", "planning_conflicts", params=params)
         
@@ -569,7 +569,6 @@ async def resolve_planning_conflict(
     """
     try:
         update_data = {
-            "resolved": True,
             "resolution_status": data.resolution_status,
             "resolved_by": data.resolved_by,
             "resolved_at": datetime.utcnow().isoformat(),
