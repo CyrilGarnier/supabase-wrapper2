@@ -764,6 +764,33 @@ async def get_modules(
     
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+# ============================================
+# ENDPOINT : CALENDRIER HTML
+# ============================================
+
+from fastapi.responses import HTMLResponse
+
+@app.get("/planning/calendar", response_class=HTMLResponse)
+async def get_planning_calendar(
+    date: Optional[str] = Query(default=None, description="Date de référence (YYYY-MM-DD)"),
+    _: bool = Depends(verify_agent_token)
+):
+    """
+    Affichage HTML du planning hebdomadaire
+    
+    GET /planning/calendar?date=2026-01-19&token=AGENT_TOKEN_PHOTOMENTOR_2026
+    """
+    template_path = "planning_calendar_view.html"
+    
+    try:
+        with open(template_path, "r", encoding="utf-8") as f:
+            html_content = f.read()
+        return HTMLResponse(content=html_content)
+    except FileNotFoundError:
+        return HTMLResponse(
+            content="<h1>❌ Template non trouvé</h1><p>Le fichier planning_calendar_view.html est introuvable.</p>", 
+            status_code=404
+        )
 
 # ============================================================================
 # RUN
