@@ -512,3 +512,208 @@ async def change_role(
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
+
+# =====================================================
+# ROUTES : USER ACTIVITY (TRACKING PÉDAGOGIQUE)
+# =====================================================
+
+@app.post("/activity", status_code=201)
+async def create_activity(
+    data: dict,
+    current_user: dict = Depends(get_current_user)
+):
+    """Créer une nouvelle session d'activité"""
+    required_fields = ["session_id", "agent_name", "started_at", "status"]
+    for field in required_fields:
+        if field not in data:
+            raise HTTPException(400, f"Missing required field: {field}")
+    
+    if "user_id" not in data:
+        data["user_id"] = current_user["id"]
+    
+    if current_user["role"] not in ["ADMIN", "INSTRUCTOR"] and data["user_id"] != current_user["id"]:
+        raise HTTPException(403, "Cannot create activity for another user")
+    
+    response = await httpx_client.post(
+        f"{SUPABASE_URL}/rest/v1/user_activity",
+        headers={
+            "apikey": SUPABASE_KEY,
+            "Authorization": f"Bearer {SUPABASE_KEY}",
+            "Content-Type": "application/json",
+            "Prefer": "return=representation"
+        },
+        json=data
+    )
+    
+    if response.status_code != 201:
+        raise HTTPException(500, f"Failed to create activity: {response.text}")
+    
+    return {"success": True, "data": response.json()[0]}
+
+
+@app.get("/activity/student/{user_id}")
+async def get_student_activities(
+    user_id: str,
+    agent_name: str = None,
+    limit: int = 50,
+    current_user: dict = Depends(get_current_user)
+):
+    """Récupérer les activités d'un étudiant"""
+    if current_user["role"] not in ["ADMIN", "INSTRUCTOR", "ANALYST"] and current_user["id"] != user_id:
+        raise HTTPException(403, "Cannot view other students' activities")
+    
+    params = {
+        "user_id": f"eq.{user_id}",
+        "order": "started_at.desc",
+        "limit": str(limit)
+    }
+    
+    if agent_name:
+        params["agent_name"] = f"eq.{agent_name}"
+    
+    response = await httpx_client.get(
+        f"{SUPABASE_URL}/rest/v1/user_activity",
+        headers={
+            "apikey": SUPABASE_KEY,
+            "Authorization": f"Bearer {SUPABASE_KEY}",
+        },
+        params=params
+    )
+    
+    return {"success": True, "count": len(response.json()), "data": response.json()}
+
+
+@app.patch("/activity/{session_id}")
+async def update_activity(
+    session_id: str,
+    data: dict,
+    current_user: dict = Depends(get_current_user)
+):
+    """Mettre à jour une session"""
+    check_response = await httpx_client.get(
+        f"{SUPABASE_URL}/rest/v1/user_activity",
+        headers={
+            "apikey": SUPABASE_KEY,
+            "Authorization": f"Bearer {SUPABASE_KEY}",
+        },
+        params={"session_id": f"eq.{session_id}"}
+    )
+    
+    sessions = check_response.json()
+    if not sessions:
+        raise HTTPException(404, "Session not found")
+    
+    session = sessions[0]
+    
+    if current_user["role"] not in ["ADMIN", "INSTRUCTOR"] and session["user_id"] != current_user["id"]:
+        raise HTTPException(403, "Cannot update another user's session")
+    
+    response = await httpx_client.patch(
+        f"{SUPABASE_URL}/rest/v1/user_activity",
+        headers={
+            "apikey": SUPABASE_KEY,
+            "Authorization": f"Bearer {SUPABASE_KEY}",
+            "Content-Type": "application/json",
+            "Prefer": "return=representation"
+        },
+        params={"session_id": f"eq.{session_id}"},
+        json=data
+    )
+    
+    if response.status_code != 200:
+        raise HTTPException(500, f"Failed to update activity: {response.text}")
+    
+    return {"success": True, "data": response.json()[0] if response.json() else None}
+
+
+@app.get("/activity/progress/{user_id}/{agent_name}")
+async def get_progress(
+    user_id: str,
+    agent_name: str,
+    current_user: dict = Depends(get_current_user)
+):
+    """Obtenir la progression d'un étudiant sur un agent"""
+    if current_user["role"] not in ["ADMIN", "INSTRUCTOR", "ANALYST"] and current_user["id"] != user_id:
+        raise HTTPException(403, "Cannot view other students' progress")
+    
+    response = await httpx_client.post(
+        f"{SUPABASE_URL}/rest/v1/rpc/get_student_progression",
+        headers={
+            "apikey": SUPABASE_KEY,
+            "Authorization": f"Bearer {SUPABASE_KEY}",
+            "Content-Type": "application/json"
+        },
+        json={
+            "p_user_id": user_id,
+            "p_agent_name": agent_name
+        }
+    )
+    
+    if response.status_code != 200:
+        raise HTTPException(500, f"Failed to get progression: {response.text}")
+    
+    result = response.json()
+    
+    return {
+        "success": True,
+        "user_id": user_id,
+        "agent_name": agent_name,
+        "data": result[0] if result else {
+            "session_count": 0,
+            "last_session": None,
+            "current_level": None,
+            "avg_score": None,
+            "total_duration": 0
+        }
+    }
+
+
+@app.get("/activity/stats")
+async def get_activity_stats(
+    current_user: dict = Depends(require_role("ADMIN", "INSTRUCTOR", "ANALYST"))
+):
+    """Statistiques globales (vue v_agent_stats)"""
+    response = await httpx_client.get(
+        f"{SUPABASE_URL}/rest/v1/v_agent_stats",
+        headers={
+            "apikey": SUPABASE_KEY,
+            "Authorization": f"Bearer {SUPABASE_KEY}",
+        }
+    )
+    
+    return {"success": True, "data": response.json()}
+
+
+@app.get("/activity/recent")
+async def get_recent_activities(
+    limit: int = 20,
+    current_user: dict = Depends(require_role("ADMIN", "INSTRUCTOR"))
+):
+    """Sessions récentes (vue v_recent_sessions)"""
+    response = await httpx_client.get(
+        f"{SUPABASE_URL}/rest/v1/v_recent_sessions",
+        headers={
+            "apikey": SUPABASE_KEY,
+            "Authorization": f"Bearer {SUPABASE_KEY}",
+        },
+        params={"limit": str(limit)}
+    )
+    
+    return {"success": True, "count": len(response.json()), "data": response.json()}
+
+
+@app.get("/activity/students/progress")
+async def get_all_students_progress(
+    current_user: dict = Depends(require_role("ADMIN", "INSTRUCTOR"))
+):
+    """Progression de tous les étudiants (vue v_student_progress)"""
+    response = await httpx_client.get(
+        f"{SUPABASE_URL}/rest/v1/v_student_progress",
+        headers={
+            "apikey": SUPABASE_KEY,
+            "Authorization": f"Bearer {SUPABASE_KEY}",
+        },
+        params={"order": "last_session.desc"}
+    )
+    
+    return {"success": True, "count": len(response.json()), "data": response.json()}
