@@ -527,7 +527,10 @@ async def get_planning_conflicts(
         }
         
         if resolved is not None:
-            params["resolved"] = f"eq.{str(resolved).lower()}"
+    if resolved:
+        params["resolved_at"] = "not.is.null"
+    else:
+        params["resolved_at"] = "is.null"
         
         response = supabase_request("GET", "planning_conflicts", params=params)
         
