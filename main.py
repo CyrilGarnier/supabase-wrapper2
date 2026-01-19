@@ -263,7 +263,8 @@ async def agent_session_end(
         
         session = response.json()[0]
         started_at = datetime.fromisoformat(session["started_at"].replace("Z", "+00:00"))
-        completed_at = datetime.utcnow()
+        from datetime import timezone
+        completed_at = datetime.now(timezone.utc)
         duration_minutes = int((completed_at - started_at).total_seconds() / 60)
         
         update_data = {
