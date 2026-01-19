@@ -1,0 +1,557 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Planning Enseignement - Cyril GARNIER</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 20px;
+            min-height: 100vh;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 16px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 32px;
+            margin-bottom: 10px;
+        }
+
+        .header .period {
+            font-size: 18px;
+            opacity: 0.9;
+        }
+
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            padding: 30px;
+            background: #f8f9fa;
+        }
+
+        .stat-card {
+            background: white;
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            text-align: center;
+        }
+
+        .stat-card .value {
+            font-size: 32px;
+            font-weight: bold;
+            color: #667eea;
+            margin-bottom: 5px;
+        }
+
+        .stat-card .label {
+            font-size: 14px;
+            color: #666;
+            text-transform: uppercase;
+        }
+
+        .conflicts-alert {
+            background: #fee2e2;
+            border-left: 4px solid #dc2626;
+            padding: 20px;
+            margin: 20px 30px;
+            border-radius: 8px;
+        }
+
+        .conflicts-alert h3 {
+            color: #dc2626;
+            margin-bottom: 10px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .calendar-grid {
+            padding: 30px;
+        }
+
+        .week-header {
+            display: grid;
+            grid-template-columns: 80px repeat(7, 1fr);
+            gap: 10px;
+            margin-bottom: 10px;
+            font-weight: bold;
+            color: #666;
+            font-size: 14px;
+        }
+
+        .week-header .day {
+            text-align: center;
+            padding: 10px;
+        }
+
+        .time-grid {
+            display: grid;
+            grid-template-columns: 80px repeat(7, 1fr);
+            gap: 10px;
+            position: relative;
+        }
+
+        .time-slot {
+            padding: 10px 5px;
+            font-size: 12px;
+            color: #999;
+            border-top: 1px solid #eee;
+            text-align: right;
+        }
+
+        .day-column {
+            border-left: 1px solid #eee;
+            position: relative;
+            min-height: 600px;
+        }
+
+        .session-block {
+            position: absolute;
+            left: 5px;
+            right: 5px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 8px;
+            border-radius: 6px;
+            font-size: 12px;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+            overflow: hidden;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+
+        .session-block:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+        }
+
+        .session-block.conflict {
+            background: linear-gradient(135deg, #dc2626 0%, #b91c1c 100%);
+            border: 2px solid #fecaca;
+        }
+
+        .session-block.confirmed {
+            background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+        }
+
+        .session-block .time {
+            font-weight: bold;
+            margin-bottom: 4px;
+        }
+
+        .session-block .etablissement {
+            font-size: 11px;
+            opacity: 0.9;
+            margin-bottom: 2px;
+        }
+
+        .session-block .module {
+            font-size: 10px;
+            opacity: 0.8;
+        }
+
+        .session-block .ca {
+            position: absolute;
+            bottom: 4px;
+            right: 8px;
+            font-size: 10px;
+            font-weight: bold;
+            background: rgba(255,255,255,0.2);
+            padding: 2px 6px;
+            border-radius: 4px;
+        }
+
+        .legend {
+            display: flex;
+            gap: 20px;
+            padding: 20px 30px;
+            background: #f8f9fa;
+            border-top: 1px solid #eee;
+            flex-wrap: wrap;
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 14px;
+        }
+
+        .legend-color {
+            width: 20px;
+            height: 20px;
+            border-radius: 4px;
+        }
+
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.5);
+            z-index: 1000;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .modal.active {
+            display: flex;
+        }
+
+        .modal-content {
+            background: white;
+            padding: 30px;
+            border-radius: 12px;
+            max-width: 500px;
+            width: 90%;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+        }
+
+        .modal-content h2 {
+            margin-bottom: 20px;
+            color: #667eea;
+        }
+
+        .modal-content .detail-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 10px 0;
+            border-bottom: 1px solid #eee;
+        }
+
+        .modal-content .detail-row:last-child {
+            border-bottom: none;
+        }
+
+        .modal-content .close-btn {
+            background: #667eea;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 6px;
+            cursor: pointer;
+            margin-top: 20px;
+            width: 100%;
+        }
+
+        @media print {
+            body {
+                background: white;
+                padding: 0;
+            }
+            .container {
+                box-shadow: none;
+            }
+            .header {
+                background: #667eea;
+                -webkit-print-color-adjust: exact;
+                print-color-adjust: exact;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>📅 Planning Enseignement</h1>
+            <div class="period" id="period">Semaine du 20-26 janvier 2026</div>
+        </div>
+
+        <div class="stats">
+            <div class="stat-card">
+                <div class="value" id="sessions-count">0</div>
+                <div class="label">Sessions</div>
+            </div>
+            <div class="stat-card">
+                <div class="value" id="ca-ht">0 €</div>
+                <div class="label">CA HT</div>
+            </div>
+            <div class="stat-card">
+                <div class="value" id="ca-ttc">0 €</div>
+                <div class="label">CA TTC</div>
+            </div>
+            <div class="stat-card">
+                <div class="value" id="conflicts-count">0</div>
+                <div class="label">Conflits</div>
+            </div>
+        </div>
+
+        <div id="conflicts-alert" class="conflicts-alert" style="display: none;">
+            <h3>🚨 Conflits détectés</h3>
+            <div id="conflicts-list"></div>
+        </div>
+
+        <div class="calendar-grid">
+            <div class="week-header">
+                <div></div>
+                <div class="day">Lundi</div>
+                <div class="day">Mardi</div>
+                <div class="day">Mercredi</div>
+                <div class="day">Jeudi</div>
+                <div class="day">Vendredi</div>
+                <div class="day">Samedi</div>
+                <div class="day">Dimanche</div>
+            </div>
+
+            <div class="time-grid" id="time-grid">
+                <!-- Time slots will be generated by JS -->
+            </div>
+        </div>
+
+        <div class="legend">
+            <div class="legend-item">
+                <div class="legend-color" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);"></div>
+                <span>Planifié</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: linear-gradient(135deg, #10b981 0%, #059669 100%);"></div>
+                <span>Confirmé</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: linear-gradient(135deg, #dc2626 0%, #b91c1c 100%);"></div>
+                <span>Conflit</span>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal" id="session-modal">
+        <div class="modal-content">
+            <h2 id="modal-title">Détails de la session</h2>
+            <div id="modal-details"></div>
+            <button class="close-btn" onclick="closeModal()">Fermer</button>
+        </div>
+    </div>
+
+    <script>
+        // Configuration API
+        const API_URL = 'https://basegenspark-api-production.up.railway.app';
+        const API_TOKEN = 'AGENT_TOKEN_PHOTOMENTOR_2026';
+
+        // Générer les créneaux horaires (7h - 20h)
+        function generateTimeSlots() {
+            const grid = document.getElementById('time-grid');
+            
+            for (let hour = 7; hour <= 20; hour++) {
+                const timeSlot = document.createElement('div');
+                timeSlot.className = 'time-slot';
+                timeSlot.textContent = `${hour}:00`;
+                grid.appendChild(timeSlot);
+
+                // Ajouter 7 colonnes pour les jours
+                for (let day = 0; day < 7; day++) {
+                    const dayColumn = document.createElement('div');
+                    dayColumn.className = 'day-column';
+                    dayColumn.dataset.day = day;
+                    dayColumn.dataset.hour = hour;
+                    grid.appendChild(dayColumn);
+                }
+            }
+        }
+
+        // Calculer position session dans la grille
+        function getSessionPosition(horaire_debut, horaire_fin) {
+            const [startHour, startMin] = horaire_debut.split(':').map(Number);
+            const [endHour, endMin] = horaire_fin.split(':').map(Number);
+            
+            const startMinutes = (startHour - 7) * 60 + startMin;
+            const endMinutes = (endHour - 7) * 60 + endMin;
+            const durationMinutes = endMinutes - startMinutes;
+            
+            const pixelsPerHour = 60; // Hauteur d'une heure en pixels
+            const top = (startMinutes / 60) * pixelsPerHour;
+            const height = (durationMinutes / 60) * pixelsPerHour;
+            
+            return { top, height };
+        }
+
+        // Afficher session dans le calendrier
+        function renderSession(session, dayIndex, conflicts) {
+            const { top, height } = getSessionPosition(session.horaire_debut, session.horaire_fin);
+            
+            const sessionBlock = document.createElement('div');
+            sessionBlock.className = 'session-block';
+            
+            // Vérifier si session en conflit
+            const isConflict = conflicts.some(c => 
+                c.session_id_1 === session.id || c.session_id_2 === session.id
+            );
+            
+            if (isConflict) {
+                sessionBlock.classList.add('conflict');
+            } else if (session.statut_id === 2) {
+                sessionBlock.classList.add('confirmed');
+            }
+            
+            sessionBlock.style.top = `${top}px`;
+            sessionBlock.style.height = `${height}px`;
+            
+            sessionBlock.innerHTML = `
+                <div class="time">${session.horaire_debut} - ${session.horaire_fin}</div>
+                <div class="etablissement">${session.etablissement_nom || 'Établissement'}</div>
+                <div class="module">${session.module_nom || 'Module'}</div>
+                <div class="ca">${session.ca_ht}€</div>
+            `;
+            
+            sessionBlock.onclick = () => showSessionDetails(session);
+            
+            // Trouver la colonne du jour
+            const dayColumns = document.querySelectorAll(`.day-column[data-day="${dayIndex}"]`);
+            if (dayColumns.length > 0) {
+                dayColumns[0].appendChild(sessionBlock);
+            }
+        }
+
+        // Afficher détails session dans modal
+        function showSessionDetails(session) {
+            const modal = document.getElementById('session-modal');
+            const title = document.getElementById('modal-title');
+            const details = document.getElementById('modal-details');
+            
+            title.textContent = session.module_nom || 'Session';
+            
+            details.innerHTML = `
+                <div class="detail-row">
+                    <strong>Date</strong>
+                    <span>${new Date(session.date).toLocaleDateString('fr-FR')}</span>
+                </div>
+                <div class="detail-row">
+                    <strong>Horaire</strong>
+                    <span>${session.horaire_debut} - ${session.horaire_fin}</span>
+                </div>
+                <div class="detail-row">
+                    <strong>Établissement</strong>
+                    <span>${session.etablissement_nom || 'N/A'}</span>
+                </div>
+                <div class="detail-row">
+                    <strong>Promotion</strong>
+                    <span>${session.promotion_nom || 'N/A'}</span>
+                </div>
+                <div class="detail-row">
+                    <strong>Durée facturée</strong>
+                    <span>${session.duree_facturee_h}h</span>
+                </div>
+                <div class="detail-row">
+                    <strong>CA HT</strong>
+                    <span>${session.ca_ht} €</span>
+                </div>
+                <div class="detail-row">
+                    <strong>CA TTC</strong>
+                    <span>${session.ca_ttc} €</span>
+                </div>
+                ${session.notes ? `
+                <div class="detail-row">
+                    <strong>Notes</strong>
+                    <span>${session.notes}</span>
+                </div>
+                ` : ''}
+            `;
+            
+            modal.classList.add('active');
+        }
+
+        function closeModal() {
+            document.getElementById('session-modal').classList.remove('active');
+        }
+
+        // Charger données depuis API
+        async function loadPlanning() {
+            try {
+                // Calculer date début/fin de semaine
+                const today = new Date();
+                const weekStart = new Date(today);
+                weekStart.setDate(today.getDate() - today.getDay() + 1);
+                
+                const weekEnd = new Date(weekStart);
+                weekEnd.setDate(weekStart.getDate() + 6);
+                
+                const dateStart = weekStart.toISOString().split('T')[0];
+                const dateEnd = weekEnd.toISOString().split('T')[0];
+                
+                // Charger sessions
+                const sessionsRes = await fetch(`${API_URL}/planning/sessions?date_start=${dateStart}&date_end=${dateEnd}&token=${API_TOKEN}`);
+                const sessionsData = await sessionsRes.json();
+                
+                // Charger conflits
+                const conflictsRes = await fetch(`${API_URL}/planning/conflicts?resolved=false&token=${API_TOKEN}`);
+                const conflictsData = await conflictsRes.json();
+                
+                // Mettre à jour stats
+                const caHt = sessionsData.sessions.reduce((sum, s) => sum + (s.ca_ht || 0), 0);
+                const caTtc = sessionsData.sessions.reduce((sum, s) => sum + (s.ca_ttc || 0), 0);
+                
+                document.getElementById('sessions-count').textContent = sessionsData.count;
+                document.getElementById('ca-ht').textContent = `${caHt.toFixed(2)} €`;
+                document.getElementById('ca-ttc').textContent = `${caTtc.toFixed(2)} €`;
+                document.getElementById('conflicts-count').textContent = conflictsData.count;
+                
+                // Afficher alerte conflits
+                if (conflictsData.count > 0) {
+                    const alert = document.getElementById('conflicts-alert');
+                    alert.style.display = 'block';
+                    
+                    const list = document.getElementById('conflicts-list');
+                    list.innerHTML = conflictsData.conflicts.slice(0, 3).map(c => `
+                        <div style="margin-top: 10px;">
+                            • ${c.description}
+                        </div>
+                    `).join('');
+                }
+                
+                // Afficher période
+                document.getElementById('period').textContent = 
+                    `Semaine du ${weekStart.toLocaleDateString('fr-FR')} - ${weekEnd.toLocaleDateString('fr-FR')}`;
+                
+                // Afficher sessions
+                sessionsData.sessions.forEach(session => {
+                    const sessionDate = new Date(session.date);
+                    const dayIndex = sessionDate.getDay() === 0 ? 6 : sessionDate.getDay() - 1;
+                    renderSession(session, dayIndex, conflictsData.conflicts);
+                });
+                
+            } catch (error) {
+                console.error('Erreur chargement planning:', error);
+                alert('Erreur lors du chargement du planning. Vérifiez la connexion API.');
+            }
+        }
+
+        // Initialisation
+        document.addEventListener('DOMContentLoaded', () => {
+            generateTimeSlots();
+            loadPlanning();
+        });
+
+        // Fermer modal en cliquant en dehors
+        document.getElementById('session-modal').onclick = (e) => {
+            if (e.target.id === 'session-modal') {
+                closeModal();
+            }
+        };
+    </script>
+</body>
+</html>
