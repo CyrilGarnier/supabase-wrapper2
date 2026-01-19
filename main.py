@@ -1,6 +1,6 @@
 """
 =====================================================
-BaseGenspark API - Version 2.0 avec Authentification
+BaseGenspark API - Version 3.1 avec Authentification
 Fusionné : API existante + Sécurité RBAC
 =====================================================
 """
@@ -717,3 +717,165 @@ async def get_all_students_progress(
     )
     
     return {"success": True, "count": len(response.json()), "data": response.json()}
+# ============================================================================
+# ENDPOINTS AGENTS SÉCURISÉS
+# ============================================================================
+
+from typing import Optional, List
+from pydantic import BaseModel, EmailStr
+
+# Token secret agent (à mettre dans variables d'environnement)
+AGENT_SECRET_TOKEN = os.getenv("AGENT_SECRET_TOKEN", "AGENT_TOKEN_PHOTOMENTOR_2026")
+
+# Modèles Pydantic
+class AgentSessionStart(BaseModel):
+    student_email: EmailStr
+    agent_name: str
+    progression_total: int = 5
+    progression_label: Optional[str] = "Session démarrée"
+    metadata: Optional[dict] = {}
+
+class AgentSessionUpdate(BaseModel):
+    progression_current: Optional[int] = None
+    progression_label: Optional[str] = None
+    strengths: Optional[List[str]] = None
+    improvements: Optional[List[str]] = None
+    metadata: Optional[dict] = None
+
+class AgentSessionEnd(BaseModel):
+    score: float
+    completion_rate: float = 1.0
+    next_step: Optional[str] = None
+    strengths: Optional[List[str]] = None
+    improvements: Optional[List[str]] = None
+    metadata: Optional[dict] = None
+
+# Vérification token agent
+def verify_agent_token(x_agent_token: str = Header(...)):
+    if x_agent_token != AGENT_SECRET_TOKEN:
+        raise HTTPException(status_code=401, detail="Invalid agent token")
+    return True
+
+# ENDPOINT 1 : Démarrer session
+@app.post("/agent/session/start")
+async def agent_start_session(
+    data: AgentSessionStart,
+    verified: bool = Depends(verify_agent_token)
+):
+    """Démarrer une session pour un étudiant"""
+    try:
+        # 1. Trouver ou créer l'utilisateur
+        user_query = supabase.table("users").select("*").eq("email", data.student_email).execute()
+        
+        if len(user_query.data) == 0:
+            # Créer l'utilisateur
+            new_user = {
+                "id": str(uuid.uuid4()),
+                "email": data.student_email,
+                "password_hash": generate_password_hash("TempPassword2026!"),
+                "full_name": "Étudiant",
+                "role": "STUDENT",
+                "institution": "Grande École",
+                "is_active": True
+            }
+            supabase.table("users").insert(new_user).execute()
+            user_id = new_user["id"]
+        else:
+            user_id = user_query.data[0]["id"]
+        
+        # 2. Générer session_id
+        prefix_map = {
+            "photomentor_pro": "PHOTO",
+            "soda_opportunity": "SODA",
+            "data_analyst_coach": "COACH"
+        }
+        prefix = prefix_map.get(data.agent_name, "SESSION")
+        email_prefix = data.student_email.split('@')[0].upper()[:4]
+        timestamp = datetime.now().strftime('%Y%m%d')
+        random_suffix = str(uuid.uuid4())[:4].upper()
+        session_id = f"{prefix}-{timestamp}-{email_prefix}-{random_suffix}"
+        
+        # 3. Créer la session
+        session_data = {
+            "session_id": session_id,
+            "user_id": user_id,
+            "agent_name": data.agent_name,
+            "started_at": datetime.utcnow().isoformat(),
+            "status": "in_progress",
+            "progression_current": 1,
+            "progression_total": data.progression_total,
+            "progression_label": data.progression_label,
+            "metadata": data.metadata
+        }
+        supabase.table("user_activity").insert(session_data).execute()
+        
+        return {
+            "success": True,
+            "session_id": session_id,
+            "user_id": user_id,
+            "message": f"Session créée pour {data.student_email}"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ENDPOINT 2 : Mettre à jour session
+@app.patch("/agent/session/{session_id}")
+async def agent_update_session(
+    session_id: str,
+    data: AgentSessionUpdate,
+    verified: bool = Depends(verify_agent_token)
+):
+    """Mettre à jour une session"""
+    try:
+        update_data = {"updated_at": datetime.utcnow().isoformat()}
+        
+        if data.progression_current: update_data["progression_current"] = data.progression_current
+        if data.progression_label: update_data["progression_label"] = data.progression_label
+        if data.strengths: update_data["strengths"] = data.strengths
+        if data.improvements: update_data["improvements"] = data.improvements
+        if data.metadata: update_data["metadata"] = data.metadata
+        
+        result = supabase.table("user_activity").update(update_data).eq("session_id", session_id).execute()
+        
+        if len(result.data) == 0:
+            raise HTTPException(status_code=404, detail="Session non trouvée")
+        
+        return {"success": True, "session_id": session_id}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ENDPOINT 3 : Terminer session
+@app.post("/agent/session/{session_id}/end")
+async def agent_end_session(
+    session_id: str,
+    data: AgentSessionEnd,
+    verified: bool = Depends(verify_agent_token)
+):
+    """Terminer une session"""
+    try:
+        session_query = supabase.table("user_activity").select("*").eq("session_id", session_id).execute()
+        
+        if len(session_query.data) == 0:
+            raise HTTPException(status_code=404, detail="Session non trouvée")
+        
+        session = session_query.data[0]
+        
+        end_data = {
+            "status": "completed",
+            "completed_at": datetime.utcnow().isoformat(),
+            "progression_current": session["progression_total"],
+            "completion_rate": data.completion_rate,
+            "score": data.score,
+            "updated_at": datetime.utcnow().isoformat()
+        }
+        
+        if data.next_step: end_data["next_step"] = data.next_step
+        if data.strengths: end_data["strengths"] = data.strengths
+        if data.improvements: end_data["improvements"] = data.improvements
+        if data.metadata: end_data["metadata"] = data.metadata
+        
+        supabase.table("user_activity").update(end_data).eq("session_id", session_id).execute()
+        
+        return {"success": True, "session_id": session_id, "score": data.score}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
