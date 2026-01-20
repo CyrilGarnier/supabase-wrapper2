@@ -125,13 +125,15 @@ class SessionCreate(BaseModel):
     etablissement_id: int
     module_id: int
     promotion_id: Optional[int] = None
-    niveau_id: Optional[int] = None
-    type_session_id: int
     statut_id: int
-    nb_heures: float
-    tarif_horaire_ht: float
+    duree_reelle_h: Optional[float] = None
+    duree_facturee_h: float
+    tarif_ht_applique: float
+    tva_pct_applique: int = 0
     ca_ht: float
     ca_ttc: float
+    numero_session: Optional[str] = None
+    annee_scolaire: Optional[str] = None
     notes: Optional[str] = None
 
 class SessionUpdate(BaseModel):
@@ -142,13 +144,15 @@ class SessionUpdate(BaseModel):
     etablissement_id: Optional[int] = None
     module_id: Optional[int] = None
     promotion_id: Optional[int] = None
-    niveau_id: Optional[int] = None
-    type_session_id: Optional[int] = None
     statut_id: Optional[int] = None
-    nb_heures: Optional[float] = None
-    tarif_horaire_ht: Optional[float] = None
+    duree_reelle_h: Optional[float] = None
+    duree_facturee_h: Optional[float] = None
+    tarif_ht_applique: Optional[float] = None
+    tva_pct_applique: Optional[int] = None
     ca_ht: Optional[float] = None
     ca_ttc: Optional[float] = None
+    numero_session: Optional[str] = None
+    annee_scolaire: Optional[str] = None
     notes: Optional[str] = None
 
 class ConflictResolve(BaseModel):
