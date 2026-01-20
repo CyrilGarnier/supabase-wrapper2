@@ -1,0 +1,609 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Planning Enseignement - Cyril GARNIER</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 20px;
+            min-height: 100vh;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 16px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 32px;
+            margin-bottom: 10px;
+        }
+
+        .header .period {
+            font-size: 18px;
+            opacity: 0.9;
+        }
+
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            padding: 30px;
+            background: #f8f9fa;
+        }
+
+        .stat-card {
+            background: white;
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            text-align: center;
+        }
+
+        .stat-card .value {
+            font-size: 32px;
+            font-weight: bold;
+            color: #667eea;
+            margin-bottom: 5px;
+        }
+
+        .stat-card .label {
+            font-size: 14px;
+            color: #666;
+            text-transform: uppercase;
+        }
+
+        .conflicts-alert {
+            background: #fee2e2;
+            border-left: 4px solid #dc2626;
+            padding: 20px;
+            margin: 20px 30px;
+            border-radius: 8px;
+        }
+
+        .conflicts-alert h3 {
+            color: #dc2626;
+            margin-bottom: 10px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .calendar-grid {
+            padding: 30px;
+        }
+
+        .week-header {
+            display: grid;
+            grid-template-columns: 80px repeat(7, 1fr);
+            gap: 10px;
+            margin-bottom: 10px;
+        }
+
+        .week-header .day {
+            text-align: center;
+            font-weight: bold;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 8px;
+        }
+
+        .time-grid {
+            display: grid;
+            grid-template-columns: 80px repeat(7, 1fr);
+            gap: 10px;
+            position: relative;
+            max-height: 840px;
+            overflow-y: auto;
+        }
+
+        .time-slot {
+            text-align: left;
+            padding: 10px;
+            font-size: 12px;
+            color: #666;
+            font-weight: bold;
+            background: #f8f9fa;
+            border-radius: 4px;
+        }
+
+        .day-column {
+            position: relative;
+            border: 1px solid #e5e7eb;
+            border-radius: 4px;
+            height: 60px;
+            background: #fafafa;
+        }
+
+        .session-block {
+            position: absolute;
+            left: 2px;
+            right: 2px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border-radius: 6px;
+            padding: 8px;
+            color: white;
+            font-size: 11px;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+            overflow: hidden;
+            z-index: 1;
+        }
+
+        .session-block:hover {
+            transform: scale(1.02);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+            z-index: 10;
+        }
+
+        .session-block.confirmed {
+            background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+        }
+
+        .session-block.conflict {
+            background: linear-gradient(135deg, #dc2626 0%, #b91c1c 100%);
+        }
+
+        .session-block .time {
+            font-weight: bold;
+            margin-bottom: 4px;
+            font-size: 10px;
+        }
+
+        .session-block .etablissement {
+            font-weight: 600;
+            margin-bottom: 2px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .session-block .module {
+            font-size: 10px;
+            opacity: 0.9;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .session-block .ca {
+            font-size: 10px;
+            margin-top: 4px;
+            font-weight: bold;
+            opacity: 0.9;
+        }
+
+        .legend {
+            display: flex;
+            justify-content: center;
+            gap: 30px;
+            padding: 20px;
+            background: #f8f9fa;
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .legend-color {
+            width: 30px;
+            height: 20px;
+            border-radius: 4px;
+        }
+
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.5);
+            z-index: 1000;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .modal.active {
+            display: flex;
+        }
+
+        .modal-content {
+            background: white;
+            padding: 30px;
+            border-radius: 16px;
+            max-width: 500px;
+            width: 90%;
+            max-height: 80vh;
+            overflow-y: auto;
+        }
+
+        .modal-content h2 {
+            margin-bottom: 20px;
+            color: #667eea;
+        }
+
+        .detail-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 12px;
+            border-bottom: 1px solid #e5e7eb;
+        }
+
+        .detail-row:last-child {
+            border-bottom: none;
+        }
+
+        .close-btn {
+            margin-top: 20px;
+            padding: 12px 24px;
+            background: #667eea;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            width: 100%;
+        }
+
+        .close-btn:hover {
+            background: #5568d3;
+        }
+
+        @media (max-width: 1024px) {
+            .time-grid {
+                overflow-x: auto;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>📅 Planning Enseignement</h1>
+            <div class="period" id="period-text">Chargement...</div>
+        </div>
+
+        <div class="stats">
+            <div class="stat-card">
+                <div class="value" id="sessions-count">0</div>
+                <div class="label">Sessions</div>
+            </div>
+            <div class="stat-card">
+                <div class="value" id="ca-ht">0€</div>
+                <div class="label">CA HT</div>
+            </div>
+            <div class="stat-card">
+                <div class="value" id="ca-ttc">0€</div>
+                <div class="label">CA TTC</div>
+            </div>
+            <div class="stat-card">
+                <div class="value" id="conflicts-count">0</div>
+                <div class="label">Conflits</div>
+            </div>
+        </div>
+
+        <div id="conflicts-alert" class="conflicts-alert" style="display: none;">
+            <h3>🚨 Conflits détectés</h3>
+            <div id="conflicts-list"></div>
+        </div>
+
+        <div class="calendar-grid">
+            <div class="week-header">
+                <div></div>
+                <div class="day">Lundi</div>
+                <div class="day">Mardi</div>
+                <div class="day">Mercredi</div>
+                <div class="day">Jeudi</div>
+                <div class="day">Vendredi</div>
+                <div class="day">Samedi</div>
+                <div class="day">Dimanche</div>
+            </div>
+
+            <div class="time-grid" id="time-grid">
+                <!-- Time slots will be generated by JS -->
+            </div>
+        </div>
+
+        <div class="legend">
+            <div class="legend-item">
+                <div class="legend-color" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);"></div>
+                <span>Planifié</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: linear-gradient(135deg, #10b981 0%, #059669 100%);"></div>
+                <span>Confirmé</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: linear-gradient(135deg, #dc2626 0%, #b91c1c 100%);"></div>
+                <span>Conflit</span>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal" id="session-modal">
+        <div class="modal-content">
+            <h2 id="modal-title">Détails de la session</h2>
+            <div id="modal-details"></div>
+            <button class="close-btn" onclick="closeModal()">Fermer</button>
+        </div>
+    </div>
+
+    <script>
+        // Configuration API
+        const API_URL = 'https://basegenspark-api-production.up.railway.app';
+        const API_TOKEN = 'AGENT_TOKEN_PHOTOMENTOR_2026';
+
+        // Dictionnaire établissements et modules (chargé depuis API)
+        let etablissementsMap = {};
+        let modulesMap = {};
+
+        // Générer les créneaux horaires (7h - 20h)
+        function generateTimeSlots() {
+            const grid = document.getElementById('time-grid');
+            
+            for (let hour = 7; hour <= 20; hour++) {
+                const timeSlot = document.createElement('div');
+                timeSlot.className = 'time-slot';
+                timeSlot.textContent = `${hour}:00`;
+                grid.appendChild(timeSlot);
+
+                // Ajouter 7 colonnes pour les jours
+                for (let day = 0; day < 7; day++) {
+                    const dayColumn = document.createElement('div');
+                    dayColumn.className = 'day-column';
+                    dayColumn.dataset.day = day;
+                    dayColumn.dataset.hour = hour;
+                    grid.appendChild(dayColumn);
+                }
+            }
+        }
+
+        // Calculer position session dans la grille
+        function getSessionPosition(horaire_debut, horaire_fin) {
+            const [startHour, startMin] = horaire_debut.split(':').map(Number);
+            const [endHour, endMin] = horaire_fin.split(':').map(Number);
+            
+            const startMinutes = (startHour - 7) * 60 + startMin;
+            const endMinutes = (endHour - 7) * 60 + endMin;
+            const durationMinutes = endMinutes - startMinutes;
+            
+            const pixelsPerHour = 60; // Hauteur d'une heure en pixels
+            const top = (startMinutes / 60) * pixelsPerHour;
+            const height = (durationMinutes / 60) * pixelsPerHour;
+            
+            return { top, height };
+        }
+
+        // Afficher session dans le calendrier
+        function renderSession(session, dayIndex, conflicts) {
+            const { top, height } = getSessionPosition(session.horaire_debut, session.horaire_fin);
+            
+            const sessionBlock = document.createElement('div');
+            sessionBlock.className = 'session-block';
+            
+            // Vérifier si session en conflit
+            const isConflict = conflicts.some(c => 
+                c.session_id_1 === session.id || c.session_id_2 === session.id
+            );
+            
+            if (isConflict) {
+                sessionBlock.classList.add('conflict');
+            } else if (session.statut_id === 2) {
+                sessionBlock.classList.add('confirmed');
+            }
+            
+            sessionBlock.style.top = `${top}px`;
+            sessionBlock.style.height = `${height}px`;
+            
+            // CORRECTION : Récupérer nom établissement et module depuis les maps
+            const etablissementNom = etablissementsMap[session.etablissement_id] || 'Établissement';
+            const moduleNom = modulesMap[session.module_id] || 'Module';
+            
+            sessionBlock.innerHTML = `
+                <div class="time">${session.horaire_debut} - ${session.horaire_fin}</div>
+                <div class="etablissement">${etablissementNom}</div>
+                <div class="module">${moduleNom}</div>
+                <div class="ca">${session.ca_ht}€</div>
+            `;
+            
+            sessionBlock.onclick = () => showSessionDetails(session, etablissementNom, moduleNom);
+            
+            // Trouver la colonne du jour
+            const dayColumns = document.querySelectorAll(`.day-column[data-day="${dayIndex}"]`);
+            if (dayColumns.length > 0) {
+                dayColumns[0].appendChild(sessionBlock);
+            }
+        }
+
+        // Afficher détails session dans modal
+        function showSessionDetails(session, etablissementNom, moduleNom) {
+            const modal = document.getElementById('session-modal');
+            const title = document.getElementById('modal-title');
+            const details = document.getElementById('modal-details');
+            
+            title.textContent = moduleNom || 'Session';
+            
+            details.innerHTML = `
+                <div class="detail-row">
+                    <strong>Date</strong>
+                    <span>${new Date(session.date).toLocaleDateString('fr-FR')}</span>
+                </div>
+                <div class="detail-row">
+                    <strong>Horaire</strong>
+                    <span>${session.horaire_debut} - ${session.horaire_fin}</span>
+                </div>
+                <div class="detail-row">
+                    <strong>Établissement</strong>
+                    <span>${etablissementNom || 'N/A'}</span>
+                </div>
+                <div class="detail-row">
+                    <strong>Module</strong>
+                    <span>${moduleNom || 'N/A'}</span>
+                </div>
+                <div class="detail-row">
+                    <strong>Durée facturée</strong>
+                    <span>${session.duree_facturee_h}h</span>
+                </div>
+                <div class="detail-row">
+                    <strong>CA HT</strong>
+                    <span>${session.ca_ht} €</span>
+                </div>
+                <div class="detail-row">
+                    <strong>CA TTC</strong>
+                    <span>${session.ca_ttc} €</span>
+                </div>
+                ${session.notes ? `
+                <div class="detail-row">
+                    <strong>Notes</strong>
+                    <span>${session.notes}</span>
+                </div>
+                ` : ''}
+            `;
+            
+            modal.classList.add('active');
+        }
+
+        function closeModal() {
+            document.getElementById('session-modal').classList.remove('active');
+        }
+
+        // Charger établissements et modules
+        async function loadReferenceData() {
+            try {
+                // Charger établissements
+                const etablissementsRes = await fetch(`${API_URL}/planning/etablissements?token=${API_TOKEN}`);
+                const etablissementsData = await etablissementsRes.json();
+                
+                if (etablissementsData.success && etablissementsData.etablissements) {
+                    etablissementsData.etablissements.forEach(etab => {
+                        etablissementsMap[etab.id] = etab.nom;
+                    });
+                }
+                
+                // Charger modules
+                const modulesRes = await fetch(`${API_URL}/planning/modules?token=${API_TOKEN}`);
+                const modulesData = await modulesRes.json();
+                
+                if (modulesData.success && modulesData.modules) {
+                    modulesData.modules.forEach(mod => {
+                        modulesMap[mod.id] = mod.nom;
+                    });
+                }
+                
+                console.log('✅ Données de référence chargées', { etablissementsMap, modulesMap });
+            } catch (error) {
+                console.error('❌ Erreur chargement données référence:', error);
+            }
+        }
+
+        // Charger données depuis API
+        async function loadPlanning() {
+            try {
+                // Charger d'abord les données de référence
+                await loadReferenceData();
+                
+                // Lire le paramètre date dans l'URL (ex: ?date=2026-01-13)
+                const urlParams = new URLSearchParams(window.location.search);
+                const dateParam = urlParams.get('date');
+                
+                // Calculer date début/fin de semaine
+                const today = dateParam ? new Date(dateParam) : new Date();
+                const weekStart = new Date(today);
+                weekStart.setDate(today.getDate() - today.getDay() + 1);
+                
+                const weekEnd = new Date(weekStart);
+                weekEnd.setDate(weekStart.getDate() + 6);
+                
+                const dateStart = weekStart.toISOString().split('T')[0];
+                const dateEnd = weekEnd.toISOString().split('T')[0];
+                
+                // Mettre à jour période dans header
+                document.getElementById('period-text').textContent = 
+                    `Semaine du ${weekStart.toLocaleDateString('fr-FR')} au ${weekEnd.toLocaleDateString('fr-FR')}`;
+                
+                // Charger sessions
+                const sessionsRes = await fetch(`${API_URL}/planning/sessions?date_start=${dateStart}&date_end=${dateEnd}&token=${API_TOKEN}`);
+                const sessionsData = await sessionsRes.json();
+                
+                // Charger conflits
+                const conflictsRes = await fetch(`${API_URL}/planning/conflicts?resolved=false&token=${API_TOKEN}`);
+                const conflictsData = await conflictsRes.json();
+                
+                // ✅ Calculer le CA de la SEMAINE à partir des sessions récupérées
+                let caHT = 0;
+                let caTTC = 0;
+                
+                if (sessionsData.success && sessionsData.sessions) {
+                    // Compter les sessions
+                    document.getElementById('sessions-count').textContent = sessionsData.sessions.length;
+                    
+                    // Calculer le CA hebdomadaire
+                    sessionsData.sessions.forEach(session => {
+                        caHT += parseFloat(session.ca_ht || 0);
+                        caTTC += parseFloat(session.ca_ttc || 0);
+                    });
+                }
+                
+                // Afficher le CA de la semaine
+                document.getElementById('ca-ht').textContent = `${caHT.toFixed(2)}€`;
+                document.getElementById('ca-ttc').textContent = `${caTTC.toFixed(2)}€`;
+                
+                if (conflictsData.success && conflictsData.conflicts) {
+                    document.getElementById('conflicts-count').textContent = conflictsData.conflicts.length;
+                    
+                    if (conflictsData.conflicts.length > 0) {
+                        document.getElementById('conflicts-alert').style.display = 'block';
+                        const conflictsList = document.getElementById('conflicts-list');
+                        conflictsList.innerHTML = conflictsData.conflicts.map(c => 
+                            `<div style="padding: 5px 0;">• ${new Date(c.overlap_start).toLocaleString('fr-FR')} - Session ${c.session_id_1} ↔ ${c.session_id_2}</div>`
+                        ).join('');
+                    }
+                }
+                
+                // Afficher sessions dans calendrier
+                if (sessionsData.success && sessionsData.sessions) {
+                    sessionsData.sessions.forEach(session => {
+                        const sessionDate = new Date(session.date);
+                        const dayOfWeek = sessionDate.getDay();
+                        const dayIndex = dayOfWeek === 0 ? 6 : dayOfWeek - 1; // Lun=0, Dim=6
+                        
+                        renderSession(session, dayIndex, conflictsData.conflicts || []);
+                    });
+                }
+                
+            } catch (error) {
+                console.error('Erreur chargement planning:', error);
+                document.getElementById('period-text').textContent = 'Erreur de chargement';
+            }
+        }
+
+        // Initialisation
+        window.onload = () => {
+            generateTimeSlots();
+            loadPlanning();
+        };
+    </script>
+</body>
+</html>
