@@ -18,6 +18,7 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any
 from datetime import datetime, timedelta
+from routers import crm
 import httpx
 import os
 from uuid import uuid4
@@ -56,6 +57,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+# Module CRM
+app.include_router(crm.router)
 
 # ========================================
 # 🔐 SÉCURITÉ : Vérification token
